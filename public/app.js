@@ -777,24 +777,31 @@
     ];
     if (profile.isHeadAdmin) sections.push(['admins','Admins']);
 
-    var nav = sections.map(function(s){
+        var nav = sections.map(function(s){
       return '<button class="'+(state.adminSection===s[0]?'active':'')+'" data-sec="'+s[0]+'">'+s[1]+'</button>';
+    }).join('');
+    var navOptions = sections.map(function(s){
+      return '<option value="'+s[0]+'" '+(state.adminSection===s[0]?'selected':'')+'>'+s[1]+'</option>';
     }).join('');
 
     host.innerHTML =
       '<div class="section-head"><h2>Market staff admin</h2></div>' +
       '<div class="admin-grid">' +
+        '<select class="admin-nav-select" id="adminNavSelect" aria-label="Admin section">'+navOptions+'</select>' +
         '<nav class="admin-nav">'+nav+'</nav>' +
         '<div class="admin-panel" id="adminPanel"></div>' +
       '</div>';
 
-        host.querySelectorAll('.admin-nav button').forEach(function(btn){
+    host.querySelectorAll('.admin-nav button').forEach(function(btn){
       btn.addEventListener('click', function(){ state.adminSection = btn.dataset.sec; render(); refreshAdminData(); });
     });
     var activeNavBtn = host.querySelector('.admin-nav button.active');
     if (activeNavBtn && activeNavBtn.scrollIntoView){
       activeNavBtn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     }
+    document.getElementById('adminNavSelect').addEventListener('change', function(){
+      state.adminSection = this.value; render(); refreshAdminData();
+    });
 
     var panel = document.getElementById('adminPanel');
     if (state.adminSection==='approvals') renderApprovals(panel);
