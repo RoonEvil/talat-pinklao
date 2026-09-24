@@ -242,7 +242,7 @@ input:focus, select:focus, textarea:focus{ outline:2px solid var(--primary); out
   color:var(--muted); font-weight:600; font-size:.88rem;
 }
 .admin-nav button.active{ background:var(--primary-soft); color:var(--primary); }
-.admin-panel{ display:flex; flex-direction:column; gap:22px; }
+.admin-panel{ display:flex; flex-direction:column; gap:22px; min-width:0; }
 table{ width:100%; border-collapse:collapse; font-size:.86rem; }
 th, td{ text-align:left; padding:9px 8px; border-bottom:1px solid var(--border); }
 th{ color:var(--muted); font-weight:600; font-size:.76rem; text-transform:uppercase; letter-spacing:.03em; }
