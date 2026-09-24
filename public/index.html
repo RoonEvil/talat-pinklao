@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talat Pinklao</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mitr:wght@400;500;600&family=Sarabun:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="th"><span class="mark">ตลาด</span>ปิ่นเกล้า &middot; Talat Pinklao</div>
+        <div class="en">Stall booking &amp; market zoning — Somdech Phra Pinklao Hospital</div>
+      </div>
+      <div class="role-area" id="roleArea"></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="map">Market Map</button>
+      <button class="tab" data-tab="announce">Announcements</button>
+      <button class="tab" data-tab="mine">My Bookings</button>
+      <button class="tab" data-tab="admin" id="adminTabBtn" hidden>Staff Admin</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-map"></section>
+    <section id="view-announce" hidden></section>
+    <section id="view-mine" hidden></section>
+    <section id="view-admin" hidden></section>
+  </main>
+
+  <footer>
+    "Development of a Web Application for Online Stall Booking and Market Zoning at Somdech Phra Pinklao Hospital" — self-hosted build.
+  </footer>
+</div>
+
+<div id="modalRoot"></div>
+<div class="toast-wrap" id="toasts"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
