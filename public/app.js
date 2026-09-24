@@ -788,9 +788,13 @@
         '<div class="admin-panel" id="adminPanel"></div>' +
       '</div>';
 
-    host.querySelectorAll('.admin-nav button').forEach(function(btn){
+        host.querySelectorAll('.admin-nav button').forEach(function(btn){
       btn.addEventListener('click', function(){ state.adminSection = btn.dataset.sec; render(); refreshAdminData(); });
     });
+    var activeNavBtn = host.querySelector('.admin-nav button.active');
+    if (activeNavBtn && activeNavBtn.scrollIntoView){
+      activeNavBtn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    }
 
     var panel = document.getElementById('adminPanel');
     if (state.adminSection==='approvals') renderApprovals(panel);
