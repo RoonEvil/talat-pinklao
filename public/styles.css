@@ -267,7 +267,11 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px solid var(--border); c
   .admin-grid{ grid-template-columns:1fr; }
   .admin-nav{ flex-direction:row; overflow-x:auto; }
   .field-row{ grid-template-columns:1fr; }
-  .stall-grid{ grid-template-columns:repeat(2,1fr); }
+  .topbar{ position:static; padding-block:14px 10px; }
+  .brand .th{ font-size:1.24rem; }
+  .brand .en{ font-size:.76rem; }
+  .tabs{ margin-top:10px; }
+  .tab{ font-size:.86rem; padding:7px 3px; }
 }
 @media (prefers-reduced-motion: reduce){
   *{ animation-duration:0.001ms !important; transition-duration:0.001ms !important; }
