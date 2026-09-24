@@ -236,6 +236,7 @@ input:focus, select:focus, textarea:focus{ outline:2px solid var(--primary); out
 .auth-toggle-btn:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
 
 .admin-grid{ display:grid; grid-template-columns:220px 1fr; gap:24px; }
+.admin-nav-select{ display:none; }
 .admin-nav{ display:flex; flex-direction:column; gap:2px; }
 .admin-nav button{
   text-align:left; background:transparent; border:none; padding:9px 12px; border-radius:8px; cursor:pointer;
@@ -265,7 +266,8 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px solid var(--border); c
 
 @media (max-width:760px){
   .admin-grid{ grid-template-columns:1fr; }
-  .admin-nav{ flex-direction:row; overflow-x:auto; }
+    .admin-nav-select{ display:block; margin-bottom:4px; }
+  .admin-nav{ display:none; }
   .field-row{ grid-template-columns:1fr; }
   .topbar{ position:static; padding-block:14px 10px; }
   .brand .th{ font-size:1.24rem; }
