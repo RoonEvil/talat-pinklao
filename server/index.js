@@ -29,7 +29,7 @@ app.get('*', (req, res, next) => {
 
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: 'Something went wrong on the server' });
+  res.status(500).json({ error: 'เกิดข้อผิดพลาดที่เซิร์ฟเวอร์ กรุณาลองใหม่' });
 });
 
 const PORT = process.env.PORT || 4000;

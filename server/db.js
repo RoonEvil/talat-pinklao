@@ -108,8 +108,8 @@ function seed() {
       'INSERT INTO zones (name, description, color_index, sort_order) VALUES (?,?,?,?)'
     );
     const zones = [
-      ['Fresh & Prepared Food Zone', 'Cooked food, snacks and drinks under the main tents (โซนอาหารสดและสำเร็จรูป)', 0, 1, 'F', 'food'],
-      ['General Goods Zone', 'Clothing, household items and general merchandise (โซนสินค้าทั่วไป)', 1, 2, 'G', 'general']
+      ['โซนอาหารสดและสำเร็จรูป', 'อาหารปรุงสำเร็จ ของว่าง และเครื่องดื่ม ใต้เต็นท์หลัก', 0, 1, 'F', 'food'],
+      ['โซนสินค้าทั่วไป', 'เสื้อผ้า ของใช้ในบ้าน และสินค้าทั่วไป', 1, 2, 'G', 'general']
     ];
     const insertStall = db.prepare(
       `INSERT INTO stalls (zone_id, code, size_sqm, category, price_per_day, regular_price_per_day, pos_row, pos_col, active)
@@ -138,12 +138,12 @@ function seed() {
   const announceCount = db.prepare('SELECT COUNT(*) c FROM announcements').get().c;
   if (announceCount === 0) {
     db.prepare('INSERT INTO announcements (title, type, body, pinned) VALUES (?,?,?,1)').run(
-      'Welcome to Talat Pinklao', 'news',
-      'This booking system is now open for vendors. Submit a stall request from the Market Map tab and market staff will review it shortly.'
+      'ยินดีต้อนรับสู่ตลาดปิ่นเกล้า', 'news',
+      'ระบบจองล็อกเปิดให้ผู้ขายใช้งานแล้ว สามารถส่งคำขอจองล็อกได้ที่แท็บ "ผังตลาด" และเจ้าหน้าที่จะตรวจสอบให้ในเร็วๆ นี้'
     );
     db.prepare('INSERT INTO announcements (title, type, body, pinned) VALUES (?,?,?,0)').run(
-      'Market rule: keep aisles clear', 'rule',
-      'Please keep walkways between stalls clear of boxes and equipment at all times for patient and visitor access.'
+      'กฎของตลาด: ทางเดินต้องโล่ง', 'rule',
+      'กรุณาดูแลให้ทางเดินระหว่างล็อกโล่ง ไม่มีกล่องหรืออุปกรณ์กีดขวาง เพื่อความสะดวกของผู้ป่วยและผู้เยี่ยมชมตลอดเวลา'
     );
   }
 
