@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
 });
 
 router.post('/qr', requireHeadAdmin, upload.single('qr'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'ไม่มีรูปภาพที่อัปโหลด' });
   const qrPath = `/uploads/settings/${req.file.filename}`;
   db.prepare('UPDATE settings SET prompt_pay_qr_path = ? WHERE id = 1').run(qrPath);
   res.json({ promptPayQrUrl: qrPath });

@@ -15,15 +15,15 @@ router.post('/register', (req, res) => {
   const { name, phone, username: rawUsername, password } = req.body || {};
   const username = sanitizeUsername(rawUsername);
   if (!name || !phone || !username || !password) {
-    return res.status(400).json({ error: 'Name, phone, username and password are all required' });
+    return res.status(400).json({ error: 'กรุณากรอกชื่อ เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ' });
   }
   if (password.length < 4) {
-    return res.status(400).json({ error: 'Password should be at least 4 characters' });
+    return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
   }
   const adminClash = db.prepare('SELECT username FROM admins WHERE username = ?').get(username);
   const vendorClash = db.prepare('SELECT id FROM vendors WHERE id = ?').get(username);
   if (adminClash || vendorClash) {
-    return res.status(409).json({ error: 'That username is already taken' });
+    return res.status(409).json({ error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว' });
   }
   const hash = bcrypt.hashSync(password, 10);
   db.prepare(
@@ -40,14 +40,14 @@ router.post('/login', (req, res) => {
   const { username: rawUsername, password } = req.body || {};
   const username = sanitizeUsername(rawUsername);
   if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
+    return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
   }
 
   const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(username);
   if (admin) {
-    if (!admin.active) return res.status(403).json({ error: 'This account has been deactivated' });
+    if (!admin.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
     if (!bcrypt.compareSync(password, admin.password_hash)) {
-      return res.status(401).json({ error: 'Incorrect username or password' });
+      return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
     }
     const token = jwt.sign(
       { kind: 'admin', id: admin.username, name: admin.name, role: admin.role },
@@ -59,9 +59,9 @@ router.post('/login', (req, res) => {
 
   const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(username);
   if (vendor && vendor.password_hash) {
-    if (!vendor.active) return res.status(403).json({ error: 'This account has been deactivated' });
+    if (!vendor.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
     if (!bcrypt.compareSync(password, vendor.password_hash)) {
-      return res.status(401).json({ error: 'Incorrect username or password' });
+      return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
     }
     const token = jwt.sign(
       { kind: 'vendor', id: vendor.id, name: vendor.name, phone: vendor.phone },
@@ -71,7 +71,7 @@ router.post('/login', (req, res) => {
     return res.json({ token, user: { kind: 'vendor', id: vendor.id, name: vendor.name, phone: vendor.phone } });
   }
 
-  res.status(401).json({ error: 'Incorrect username or password' });
+  res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
 });
 
 module.exports = router;

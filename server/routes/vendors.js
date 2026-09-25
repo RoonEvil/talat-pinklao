@@ -24,7 +24,7 @@ router.get('/', requireAdmin, (req, res) => {
 
 router.put('/:id', requireAdmin, (req, res) => {
   const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(req.params.id);
-  if (!vendor) return res.status(404).json({ error: 'Vendor not found' });
+  if (!vendor) return res.status(404).json({ error: 'ไม่พบผู้ขายนี้' });
   const { active, isRegular } = req.body || {};
   db.prepare('UPDATE vendors SET active=?, is_regular=? WHERE id=?').run(
     active != null ? (active ? 1 : 0) : vendor.active,

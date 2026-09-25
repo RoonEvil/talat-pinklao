@@ -75,7 +75,7 @@ router.get('/', optionalAuth, (req, res) => {
     return res.json(rows);
   }
   const vendorToken = req.query.vendorToken;
-  if (!vendorToken) return res.status(400).json({ error: 'vendorToken is required' });
+  if (!vendorToken) return res.status(400).json({ error: 'กรุณาระบุ vendorToken' });
   const rows = db
     .prepare(
       `SELECT b.*, s.code as stall_code, z.name as zone_name FROM bookings b
@@ -92,20 +92,20 @@ router.post('/', (req, res) => {
     startDate, endDate, note, paymentMethod, alreadyPaid
   } = req.body || {};
   if (!stallId || !vendorToken || !vendorName || !vendorPhone || !startDate || !endDate) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ' });
   }
-  if (endDate < startDate) return res.status(400).json({ error: 'End date must be on or after start date' });
+  if (endDate < startDate) return res.status(400).json({ error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม' });
 
   const stall = db.prepare('SELECT * FROM stalls WHERE id = ?').get(stallId);
-  if (!stall || !stall.active) return res.status(404).json({ error: 'Stall not available' });
+  if (!stall || !stall.active) return res.status(404).json({ error: 'ล็อกนี้ไม่พร้อมให้จอง' });
 
   const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(vendorToken);
   if (vendor && !vendor.active) {
-    return res.status(403).json({ error: 'Your vendor account has been suspended by market staff' });
+    return res.status(403).json({ error: 'บัญชีผู้ขายของคุณถูกระงับโดยเจ้าหน้าที่ตลาด' });
   }
 
   if (hasOverlap(stallId, startDate, endDate, ['pending', 'approved'])) {
-    return res.status(409).json({ error: 'This stall already has a request or booking overlapping those dates' });
+    return res.status(409).json({ error: 'ล็อกนี้มีคำขอหรือการจองที่ทับซ้อนกับช่วงวันที่นี้อยู่แล้ว' });
   }
 
   const isRegular = !!(vendor && vendor.is_regular);
@@ -144,12 +144,12 @@ router.post('/', (req, res) => {
 router.put('/:id/status', requireAdmin, (req, res) => {
   const { status } = req.body || {};
   if (!['approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
+    return res.status(400).json({ error: "สถานะต้องเป็น 'approved' หรือ 'rejected'" });
   }
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
   if (status === 'approved' && hasOverlap(booking.stall_id, booking.start_date, booking.end_date, ['approved'], booking.id)) {
-    return res.status(409).json({ error: 'Cannot approve — overlaps an already-approved booking' });
+    return res.status(409).json({ error: 'ไม่สามารถอนุมัติได้ — ทับซ้อนกับการจองที่อนุมัติแล้ว' });
   }
   db.prepare("UPDATE bookings SET status=?, decided_at=datetime('now') WHERE id=?").run(status, req.params.id);
   res.json(bookingWithMeta(req.params.id));
@@ -157,14 +157,14 @@ router.put('/:id/status', requireAdmin, (req, res) => {
 
 router.put('/:id/payment', optionalAuth, (req, res) => {
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
   const { paymentStatus } = req.body || {};
   const isAdmin = req.user && req.user.kind === 'admin';
   if (paymentStatus === 'confirmed' && !isAdmin) {
-    return res.status(403).json({ error: 'Only market staff can confirm receipt of payment' });
+    return res.status(403).json({ error: 'เฉพาะเจ้าหน้าที่ตลาดเท่านั้นที่ยืนยันการรับเงินได้' });
   }
   if (!['paid', 'confirmed'].includes(paymentStatus)) {
-    return res.status(400).json({ error: 'Invalid payment status transition' });
+    return res.status(400).json({ error: 'สถานะการชำระเงินไม่ถูกต้อง' });
   }
   db.prepare('UPDATE bookings SET payment_status=? WHERE id=?').run(paymentStatus, req.params.id);
   res.json(bookingWithMeta(req.params.id));
@@ -172,8 +172,8 @@ router.put('/:id/payment', optionalAuth, (req, res) => {
 
 router.post('/:id/receipt', upload.single('receipt'), (req, res) => {
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+  if (!req.file) return res.status(400).json({ error: 'ไม่มีรูปภาพที่อัปโหลด' });
   const receiptPath = `/uploads/receipts/${req.file.filename}`;
   db.prepare("UPDATE bookings SET receipt_path=?, payment_status='paid' WHERE id=?").run(receiptPath, req.params.id);
   res.json(bookingWithMeta(req.params.id));
@@ -181,7 +181,7 @@ router.post('/:id/receipt', upload.single('receipt'), (req, res) => {
 
 router.delete('/:id', (req, res) => {
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
   db.prepare("UPDATE bookings SET status='cancelled', decided_at=datetime('now') WHERE id=?").run(req.params.id);
   res.json({ ok: true });
 });

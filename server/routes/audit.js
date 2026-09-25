@@ -30,9 +30,9 @@ router.get('/fines', requireAdmin, (req, res) => {
 
 router.put('/', requireAdmin, (req, res) => {
   const { bookingId, date, present, categoryMatch, fineAmount, fineReason } = req.body || {};
-  if (!bookingId || !date) return res.status(400).json({ error: 'bookingId and date are required' });
+  if (!bookingId || !date) return res.status(400).json({ error: 'กรุณาระบุ bookingId และวันที่' });
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
   const stall = db.prepare('SELECT * FROM stalls WHERE id = ?').get(booking.stall_id);
   const id = `${bookingId}_${date}`;
   db.prepare(
