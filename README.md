@@ -27,7 +27,7 @@ npm start
 
 Then open http://localhost:4000 — the frontend and API are served from the same address.
 Head admin login is seeded automatically: **username `ongsa`, password `GGEZ`** — change the
-password once you're live (Staff Admin → Admins doesn't support password changes yet; easiest
+password once you're live (ระบบแอดมิน → แอดมิน doesn't support password changes yet; easiest
 is to create a new head admin account and deactivate the old one).
 
 ## สรุปขั้นตอนคร่าวๆ (ไม่ต้องติดตั้ง git)
@@ -88,7 +88,7 @@ commit. Render redeploys automatically on every push to the connected branch.
 ## Accounts
 
 - **Head admin** (seeded automatically): username `ongsa`, password `GGEZ`. Can manage staff
-  accounts (Staff Admin → Admins) and upload the PromptPay QR code (Staff Admin → Settings).
-- **Staff accounts**: created by the head admin from Staff Admin → Admins.
+  accounts (ระบบแอดมิน → แอดมิน) and upload the PromptPay QR code (ระบบแอดมิน → ตั้งค่า).
+- **Staff accounts**: created by the head admin from ระบบแอดมิน → แอดมิน.
 - **Vendors**: anyone can browse and book as a guest (no account), or register an account from
-  the "Log in" button to have their booking history follow them across devices.
+  the "เข้าสู่ระบบ" button to have their booking history follow them across devices.
