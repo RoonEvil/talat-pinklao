@@ -108,10 +108,14 @@
     zones: [], stalls: [], activeBookings: [], bookings: [], myBookings: [], myBookingsLoaded:false,
     vendors: [], announcements: [], auditLogs: [], auditDate: null, admins: [], settings: {},
     activeTab: 'map', adminSection: 'approvals', loaded:false,
-    bookingsFilter: 'all'
+    bookingsFilter: 'all',
+    mapView: { s:1, tx:0, ty:0, fitted:false }, mapHighlight: null, mapInteracting: false,
+    editView: { s:1, tx:0, ty:0, fitted:false }, mapDraft: null, mapDirty: false,
+    mapTool: 'select', mapSelected: -1, mapPlaceStall: null, mapPlaceSize: '1x1'
   };
 
   function zoneById(id){ return state.zones.find(function(z){ return String(z.id)===String(id); }); }
+  function stallById(id){ return state.stalls.find(function(s){ return String(s.id)===String(id); }); }
   function stallsInZone(zid){ return state.stalls.filter(function(s){ return String(s.zone_id)===String(zid); }); }
   function bookingsForStall(sid){ return state.activeBookings.filter(function(b){ return String(b.stallId)===String(sid); }); }
   function activeBookingsForStall(sid){
@@ -273,47 +277,50 @@
     setTab(btn.dataset.tab);
   });
 
-  // ---------- Site plan diagram ----------
-  function renderSitePlan(zones){
-    var n = Math.max(zones.length, 1);
-    var gap = 16, x0 = 24, totalW = 752;
-    var w = (totalW - gap*(n-1)) / n;
-    var rects = zones.map(function(z, i){
-      var x = x0 + i*(w+gap);
-      var color = ZONE_COLORS[(z.color_index||0)%4];
-      var count = stallsInZone(z.id).length;
-      var tentCount = Math.min(count, 8);
-      var tents = '';
-      if (tentCount > 0){
-        var tw = Math.min(26, (w-24)/tentCount);
-        var startX = x + (w - tw*tentCount)/2;
-        for (var t=0;t<tentCount;t++){
-          var tx = startX + t*tw + tw/2;
-          tents += '<path class="sp-tent" d="M'+(tx-tw*0.32).toFixed(1)+',108 L'+tx.toFixed(1)+',86 L'+(tx+tw*0.32).toFixed(1)+',108 Z" />';
-        }
-      }
-      return '<g style="color:'+color+'">' +
-        '<rect class="sp-zone-rect" x="'+x.toFixed(1)+'" y="34" width="'+w.toFixed(1)+'" height="112" rx="10" />' +
-        '<text class="sp-zone-label" x="'+(x+12).toFixed(1)+'" y="52">'+esc(z.name)+'</text>' +
-        '<text class="sp-zone-sub" x="'+(x+12).toFixed(1)+'" y="66">'+count+' ล็อก</text>' +
-        tents +
-        '</g>';
-    }).join('');
+  // ---------- Isometric map: shared helpers ----------
+  var STALL_STATUS_LABELS = { available:'ว่าง', pending:'รอการอนุมัติ', occupied:'จองแล้ว', inactive:'ปิด' };
+  var STALL_STATUS_COLORS = { available:'var(--success)', pending:'var(--warning)', occupied:'var(--danger)', inactive:'var(--muted)' };
+  var MAP_KIND_LABELS = { stall:'ล็อก', entrance:'ทางเข้า / ออก', toilet:'ห้องน้ำ', tree:'ต้นไม้', stage:'เวที', parking:'ที่จอดรถ', text:'ข้อความ / ป้าย', object:'วัตถุอิสระ' };
 
-    return '<svg class="site-plan" viewBox="0 0 800 232" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ผังบริเวณตลาด">' +
-      '<text class="sp-context" x="400" y="14" text-anchor="middle">↑ ไปทาง ตึก OPD และอาคารอำนวยการ</text>' +
-      '<g class="sp-compass" transform="translate(34,16)">' +
-        '<circle r="11" />' +
-        '<line x1="0" y1="5" x2="0" y2="-8" />' +
-        '<text y="4" text-anchor="middle">N</text>' +
-      '</g>' +
-      rects +
-      '<rect class="sp-parking" x="606" y="150" width="170" height="26" rx="6" />' +
-      '<text class="sp-parking-label" x="691" y="167" text-anchor="middle">จุดจอดรถจักรยานยนต์</text>' +
-      '<path class="sp-entrance-arrow" d="M400,150 L382,182 L418,182 Z" />' +
-      '<text class="sp-entrance-label" x="400" y="200" text-anchor="middle">ทางเข้าหลัก</text>' +
-      '<text class="sp-entrance-sub" x="400" y="213" text-anchor="middle">ทางเข้า-ออกหลัก</text>' +
-      '</svg>';
+  function byRowCol(a, b){ return (a.pos_row||0)-(b.pos_row||0) || (a.pos_col||0)-(b.pos_col||0) || a.id-b.id; }
+
+  function autoLayout(){
+    var LEFT = 3;
+    var items = [];
+    var y = 1, widest = 6;
+    state.zones.forEach(function(z){
+      var list = stallsInZone(z.id).slice().sort(byRowCol);
+      if (!list.length) return;
+      var half = Math.ceil(list.length / 2);
+      widest = Math.max(widest, half);
+      items.push({ kind:'text', x:0, y:y, w:2, h:1, label:z.name });
+      list.forEach(function(s, i){
+        var back = i >= half;
+        items.push({ kind:'stall', stallId:s.id, x:LEFT + (back ? i - half : i), y:y + (back ? 2 : 0), w:1, h:1 });
+      });
+      for (var c = 1; c < half; c += 2) items.push({ kind:'tree', x:LEFT + c, y:y + 1, w:1, h:1 });
+      y += 4;
+    });
+    var cols = LEFT + widest + 2;
+    items.push({ kind:'text', x:cols - 3, y:0, w:3, h:1, label:'↑ ไปทาง ตึก OPD' });
+    items.push({ kind:'toilet', x:cols - 1, y:1, w:1, h:1 });
+    items.push({ kind:'parking', x:0, y:y, w:2, h:1 });
+    items.push({ kind:'entrance', x:Math.floor(cols / 2) - 1, y:y, w:2, h:1 });
+    return { cols:cols, rows:y + 1, items:items };
+  }
+
+  function cloneLayout(l){ return JSON.parse(JSON.stringify(l)); }
+  function withoutMissingStalls(l){
+    l.items = l.items.filter(function(it){ return it.kind !== 'stall' || stallById(it.stallId); });
+    return l;
+  }
+  function savedOrAutoLayout(){
+    return withoutMissingStalls(cloneLayout(state.settings.mapLayout || autoLayout()));
+  }
+  function rectsOverlap(a, b){ return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
+  function spotFree(l, rect, ignoreIdx){
+    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > l.cols || rect.y + rect.h > l.rows) return false;
+    return !l.items.some(function(it, i){ return i !== ignoreIdx && rectsOverlap(it, rect); });
   }
 
   // ---------- Market Map ----------
@@ -346,7 +353,7 @@
 
       function tileHtml(s){
         var status = stallStatus(s);
-        var label = { available:'ว่าง', pending:'รอการอนุมัติ', occupied:'จองแล้ว', inactive:'ปิด' }[status];
+        var label = STALL_STATUS_LABELS[status];
         var extra = '';
         if (status==='occupied' || status==='pending'){
           var next = activeBookingsForStall(s.id)[0];
@@ -381,16 +388,99 @@
         '</div>';
     }).join('');
 
-    var siteplan = '<div class="card site-plan-card">'+renderSitePlan(state.zones)+'</div>';
+    var zoneButtons = state.zones.map(function(z){
+      return '<button type="button" class="btn small ghost" data-mapzone="'+z.id+'"><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>'+esc(z.name)+'</button>';
+    }).join('');
 
     host.innerHTML =
-      '<div class="section-head"><h2>ผังโซนตลาด</h2><span class="muted small">แตะที่ล็อกเพื่อขอจอง</span></div>' +
-      siteplan +
+      '<div class="section-head"><h2>ผังตลาด</h2><span class="muted small">แตะที่ล็อกบนแผนผังเพื่อขอจอง</span></div>' +
+      '<div class="card isomap-card">' +
+        '<div class="isomap-toolbar">' + zoneButtons +
+          '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
+        '</div>' +
+        '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
+        '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
+      '</div>' +
       legend +
+      '<div class="section-head"><h2 style="font-size:1rem">รายการล็อกแยกตามโซน</h2></div>' +
       '<div class="zones">'+(zonesHtml || '<div class="empty">ยังไม่มีการตั้งค่าโซน</div>')+'</div>';
 
     host.querySelectorAll('.stall:not([disabled])').forEach(function(btn){
       btn.addEventListener('click', function(){ openBookingModal(btn.dataset.stall); });
+    });
+    mountPublicMap(host);
+  }
+
+  function mapZoomControls(){
+    return '<div class="iso-zoom">' +
+      '<button type="button" data-mapzoom="in" aria-label="ซูมเข้า">+</button>' +
+      '<button type="button" data-mapzoom="out" aria-label="ซูมออก">−</button>' +
+      '<button type="button" data-mapzoom="fit" aria-label="ดูทั้งแผนผัง">⤢</button>' +
+      '</div>';
+  }
+  function wireZoomControls(host, ctrl){
+    host.querySelectorAll('[data-mapzoom]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var z = btn.dataset.mapzoom;
+        if (z === 'in') ctrl.zoom(1.25); else if (z === 'out') ctrl.zoom(0.8); else ctrl.fit();
+      });
+    });
+  }
+
+  function mountPublicMap(host){
+    var layout = savedOrAutoLayout();
+    var ctrl = IsoMap.create(document.getElementById('publicMap'), {
+      layout: layout,
+      view: state.mapView,
+      wheelNeedsCtrl: true,
+      fitToItems: true,
+      ariaLabel: 'แผนผังตลาด แตะล็อกเพื่อจอง',
+      itemStyle: function(it){
+        if (it.kind !== 'stall') return { title: MAP_KIND_LABELS[it.kind] + (it.label ? ': ' + it.label : '') };
+        var s = stallById(it.stallId);
+        var st = stallStatus(s);
+        return {
+          color: STALL_STATUS_COLORS[st],
+          label: s.code,
+          title: s.code + ' · ' + STALL_STATUS_LABELS[st] + ' · ' + fmtMoney(s.price_per_day) + '/วัน',
+          clickable: st !== 'inactive',
+          cls: st === 'inactive' ? 'is-disabled' : '',
+          highlight: String(state.mapHighlight) === String(s.id)
+        };
+      },
+      onItemClick: function(idx){
+        var it = layout.items[idx];
+        if (it.kind !== 'stall') return;
+        var s = stallById(it.stallId);
+        if (s && stallStatus(s) !== 'inactive') openBookingModal(s.id);
+      },
+      onInteract: function(on){ state.mapInteracting = on; }
+    });
+    wireZoomControls(host, ctrl);
+
+    host.querySelectorAll('[data-mapzone]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var idxs = [];
+        layout.items.forEach(function(it, i){
+          var s = it.kind === 'stall' && stallById(it.stallId);
+          if (s && String(s.zone_id) === btn.dataset.mapzone) idxs.push(i);
+        });
+        if (idxs.length) ctrl.focusItems(idxs); else toast('โซนนี้ยังไม่มีล็อกบนแผนผัง', true);
+      });
+    });
+
+    document.getElementById('mapSearch').addEventListener('keydown', function(e){
+      if (e.key !== 'Enter') return;
+      var q = this.value.trim().toLowerCase();
+      if (!q){ state.mapHighlight = null; ctrl.draw(); return; }
+      var s = state.stalls.find(function(x){ return x.code.toLowerCase() === q; }) ||
+              state.stalls.find(function(x){ return x.code.toLowerCase().indexOf(q) === 0; });
+      if (!s){ toast('ไม่พบล็อก "' + this.value.trim() + '"', true); return; }
+      var idx = layout.items.findIndex(function(it){ return it.kind === 'stall' && String(it.stallId) === String(s.id); });
+      if (idx < 0){ toast('ล็อก ' + s.code + ' ยังไม่ได้วางบนแผนผัง', true); return; }
+      state.mapHighlight = s.id;
+      ctrl.draw();
+      ctrl.focusItems([idx]);
     });
   }
 
@@ -527,7 +617,7 @@
     if (e.key === 'Escape' && document.getElementById('modalRoot').innerHTML){ closeModal(); }
   });
 
-  function confirmAction(message, onConfirm){
+  function confirmAction(message, onConfirm, okLabel){
     var root = document.getElementById('modalRoot');
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
@@ -535,7 +625,7 @@
       '<div class="sub">'+esc(message)+'</div>' +
       '<div class="form-actions">' +
         '<button type="button" class="btn ghost" id="cfCancel">ยกเลิก</button>' +
-        '<button type="button" class="btn danger" id="cfOk">ลบ</button>' +
+        '<button type="button" class="btn danger" id="cfOk">'+esc(okLabel || 'ลบ')+'</button>' +
       '</div>' +
       '</div></div>';
     var back = document.getElementById('mb');
@@ -790,7 +880,7 @@
     var sections = [
       ['approvals','อนุมัติคำขอ'], ['bookings','การจองทั้งหมด'], ['summary','สรุปยอด'], ['vendors','ผู้ขาย'],
       ['announcements','ประกาศ'], ['audit','ตรวจสอบตลาด'], ['zones','โซน'],
-      ['stalls','ล็อก'], ['settings','ตั้งค่า']
+      ['stalls','ล็อก'], ['map','แผนผังตลาด'], ['settings','ตั้งค่า']
     ];
     if (profile.isHeadAdmin) sections.push(['admins','แอดมิน']);
 
@@ -829,6 +919,7 @@
     else if (state.adminSection==='audit') renderAuditAdmin(panel);
     else if (state.adminSection==='zones') renderZoneAdmin(panel);
     else if (state.adminSection==='stalls') renderStallAdmin(panel);
+    else if (state.adminSection==='map') renderMapAdmin(panel);
     else if (state.adminSection==='settings') renderSettingsAdmin(panel);
     else if (state.adminSection==='admins') renderAdminAccounts(panel);
   }
@@ -1233,6 +1324,286 @@
     });
   }
 
+  var MAP_TOOLS = [
+    ['select','เลือก / ย้าย','✋'], ['stall','บูธ / ล็อก','▦'], ['entrance','ทางเข้า / ออก','🚪'],
+    ['toilet','ห้องน้ำ','🚻'], ['tree','ต้นไม้','🌳'], ['stage','เวที','🎤'], ['parking','ที่จอดรถ','🅿️'],
+    ['text','ข้อความ / ป้าย','🔤'], ['object','วัตถุอิสระ','📦'], ['erase','ยางลบ','🧽']
+  ];
+  var MAP_SIZES = ['1x1','1x2','2x1','2x2'];
+  var editMapCtrl = null;
+
+  function placedStallIds(L){
+    var placed = {};
+    L.items.forEach(function(it){ if (it.kind === 'stall') placed[it.stallId] = true; });
+    return placed;
+  }
+  function nextUnplacedStallId(L, afterId){
+    var placed = placedStallIds(L);
+    var start = afterId != null ? state.stalls.findIndex(function(s){ return String(s.id) === String(afterId); }) + 1 : 0;
+    for (var k = 0; k < state.stalls.length; k++){
+      var s = state.stalls[(start + k) % state.stalls.length];
+      if (!placed[s.id]) return s.id;
+    }
+    return null;
+  }
+  function syncMapDirtyUi(){
+    var save = document.getElementById('mapSave');
+    var revert = document.getElementById('mapRevert');
+    var pill = document.getElementById('mapDirtyPill');
+    if (save) save.disabled = !state.mapDirty;
+    if (revert) revert.disabled = !(state.mapDirty && state.settings.mapLayout);
+    if (pill){
+      pill.className = 'pill small' + (state.mapDirty ? ' on-accent' : '');
+      pill.textContent = state.mapDirty ? 'ยังไม่ได้บันทึก' : 'บันทึกแล้ว';
+    }
+  }
+  function removeMapItem(idx){
+    state.mapDraft.items.splice(idx, 1);
+    state.mapSelected = -1;
+    state.mapDirty = true;
+    render();
+  }
+  function placeOnMap(x, y){
+    var L = state.mapDraft, tool = state.mapTool;
+    if (tool === 'select'){
+      if (state.mapSelected !== -1){ state.mapSelected = -1; render(); }
+      return;
+    }
+    if (tool === 'erase') return;
+    var dims = state.mapPlaceSize.split('x');
+    var item = { kind:tool, x:x, y:y, w:+dims[0], h:+dims[1] };
+    if (tool === 'stall'){
+      var sid = state.mapPlaceStall || nextUnplacedStallId(L, null);
+      if (!sid){ toast('ไม่มีบูธที่ยังไม่ได้วาง', true); return; }
+      item.stallId = +sid;
+    }
+    if (tool === 'text') item.label = 'ป้าย';
+    if (!spotFree(L, item, -1)){
+      var outside = item.x + item.w > L.cols || item.y + item.h > L.rows;
+      toast(outside ? 'พื้นที่ไม่พอสำหรับขนาดนี้' : 'ช่องนี้มีของวางอยู่แล้ว', true);
+      return;
+    }
+    L.items.push(item);
+    state.mapDirty = true;
+    if (tool === 'stall'){
+      state.mapPlaceStall = nextUnplacedStallId(L, item.stallId);
+      state.mapSelected = -1;
+    } else {
+      state.mapSelected = L.items.length - 1;
+    }
+    render();
+  }
+
+  function renderMapAdmin(panel){
+    if (!state.loaded){
+      panel.innerHTML = '<div class="empty"><div class="big">⏳</div>กำลังโหลดแผนผัง…</div>';
+      return;
+    }
+    if (!state.mapDraft){
+      state.mapDraft = savedOrAutoLayout();
+      state.mapDirty = !state.settings.mapLayout;
+      state.mapSelected = -1;
+    } else {
+      var before = state.mapDraft.items.length;
+      withoutMissingStalls(state.mapDraft);
+      if (state.mapDraft.items.length !== before) state.mapSelected = -1;
+    }
+    var L = state.mapDraft;
+    var placed = placedStallIds(L);
+    var unplaced = state.stalls.filter(function(s){ return !placed[s.id]; });
+    if (state.mapPlaceStall && placed[state.mapPlaceStall]) state.mapPlaceStall = null;
+    var tool = state.mapTool;
+    var sel = state.mapSelected >= 0 ? L.items[state.mapSelected] : null;
+    if (!sel) state.mapSelected = -1;
+
+    var toolsHtml = MAP_TOOLS.map(function(t){
+      var on = tool === t[0];
+      return '<button type="button" class="map-tool'+(on?' active':'')+'" data-tool="'+t[0]+'" aria-pressed="'+on+'"><span class="ico" aria-hidden="true">'+t[2]+'</span><span>'+t[1]+'</span></button>';
+    }).join('');
+
+    var hint = { select:'คลิกเพื่อเลือก ลากเพื่อย้ายวัตถุ', stall:'คลิกช่องว่างเพื่อวางบูธที่เลือก', erase:'คลิกวัตถุเพื่อลบออกจากแผนผัง' }[tool] ||
+      ('คลิกช่องว่างเพื่อวาง' + MAP_KIND_LABELS[tool]);
+
+    var chips = unplaced.length ? unplaced.map(function(s){
+      return '<button type="button" class="map-chip'+(String(state.mapPlaceStall)===String(s.id)?' active':'')+'" data-placestall="'+s.id+'" data-code="'+esc(s.code.toLowerCase())+'">'+esc(s.code)+'</button>';
+    }).join('') : '<div class="muted small">บูธถูกวางครบแล้ว</div>';
+
+    var sizeBtns = MAP_SIZES.map(function(sz){
+      var on = sel ? (sel.w + 'x' + sel.h === sz) : state.mapPlaceSize === sz;
+      return '<button type="button" class="btn small '+(on?'primary':'ghost')+'" data-size="'+sz+'">'+sz.replace('x','×')+'</button>';
+    }).join('');
+
+    var props = '<div class="muted small">คลิกวัตถุบนแผนผังเพื่อดูรายละเอียด</div>';
+    if (sel){
+      var selStall = sel.kind === 'stall' ? stallById(sel.stallId) : null;
+      var selZone = selStall ? zoneById(selStall.zone_id) : null;
+      props = '<dl class="map-props">' +
+          '<dt>ประเภท</dt><dd>'+MAP_KIND_LABELS[sel.kind]+'</dd>' +
+          (selStall ? '<dt>รหัสล็อก</dt><dd class="mono">'+esc(selStall.code)+'</dd><dt>โซน</dt><dd>'+esc(selZone ? selZone.name : '—')+'</dd>' : '') +
+          '<dt>ตำแหน่ง</dt><dd class="mono">'+sel.x+', '+sel.y+'</dd>' +
+          '<dt>ขนาด</dt><dd class="mono">'+sel.w+'×'+sel.h+'</dd>' +
+        '</dl>' +
+        (sel.kind !== 'stall' ? '<div class="field" style="margin:10px 0 0"><label for="mapLabel">'+(sel.kind==='text'?'ข้อความบนป้าย':'ชื่อ (ถ้ามี)')+'</label><input id="mapLabel" maxlength="40" value="'+esc(sel.label||'')+'"></div>' : '') +
+        '<button type="button" class="btn small danger" id="mapRemove" style="margin-top:10px">ลบออกจากแผนผัง</button>';
+    }
+
+    panel.innerHTML =
+      '<div class="card map-tools" role="toolbar" aria-label="เครื่องมือแผนผัง">' + toolsHtml + '</div>' +
+      '<div class="map-editor">' +
+        '<div class="card isomap-card">' +
+          '<div class="isomap-wrap"><div class="isomap" id="editMap"></div>' + mapZoomControls() + '</div>' +
+          '<div class="isomap-hint muted small">ลากพื้นที่ว่างเพื่อเลื่อนแผนผัง · ใช้ล้อเมาส์เพื่อซูม · '+esc(hint)+'</div>' +
+        '</div>' +
+        '<div class="map-side">' +
+          '<div class="card map-side-card"><div class="kicker">เลือกบูธ</div><strong>'+unplaced.length+' บูธที่ยังไม่ได้วาง</strong>' +
+            (unplaced.length ? '<input type="search" id="mapStallSearch" placeholder="ค้นหารหัสล็อก" aria-label="ค้นหารหัสล็อก" style="margin-top:8px">' : '') +
+            '<div class="map-unplaced">'+chips+'</div></div>' +
+          '<div class="card map-side-card"><div class="kicker">ขนาด</div><div class="size-row">'+sizeBtns+'</div></div>' +
+          '<div class="card map-side-card"><div class="kicker">รายละเอียด</div>'+props+'</div>' +
+          '<div class="card map-side-card"><div class="kicker">ขนาดพื้นที่</div><div class="field-row">' +
+            '<div class="field"><label for="mapCols">กว้าง (ช่อง)</label><input id="mapCols" type="number" min="4" max="60" value="'+L.cols+'"></div>' +
+            '<div class="field"><label for="mapRows">ยาว (ช่อง)</label><input id="mapRows" type="number" min="4" max="60" value="'+L.rows+'"></div>' +
+          '</div><button type="button" class="btn small ghost" id="mapResize">ใช้ขนาดนี้</button></div>' +
+          '<div class="map-actions">' +
+            '<span id="mapDirtyPill"></span>' +
+            '<button type="button" class="btn primary" id="mapSave">บันทึกแผนผัง</button>' +
+            '<button type="button" class="btn ghost" id="mapRevert">ยกเลิกการแก้ไข</button>' +
+            '<button type="button" class="btn ghost" id="mapAuto">จัดวางอัตโนมัติ</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    syncMapDirtyUi();
+
+    editMapCtrl = IsoMap.create(document.getElementById('editMap'), {
+      layout: L,
+      view: state.editView,
+      editable: true,
+      ariaLabel: 'ตัวแก้ไขแผนผังตลาด',
+      selected: function(){ return state.mapSelected; },
+      itemStyle: function(it){
+        if (it.kind !== 'stall') return { clickable:true, title: MAP_KIND_LABELS[it.kind] + (it.label ? ': ' + it.label : '') };
+        var s = stallById(it.stallId);
+        var z = s && zoneById(s.zone_id);
+        return {
+          clickable: true,
+          color: z ? ZONE_COLORS[(z.color_index||0)%4] : 'var(--zone-2)',
+          label: s ? s.code : '?',
+          title: (s ? s.code : '') + (z ? ' · ' + z.name : '')
+        };
+      },
+      canDrag: function(){ return state.mapTool === 'select'; },
+      onItemMoved: function(idx){
+        if (!spotFree(L, L.items[idx], idx)){ toast('วางซ้อนกับวัตถุอื่นไม่ได้', true); return false; }
+        state.mapSelected = idx;
+        state.mapDirty = true;
+        render();
+        return true;
+      },
+      onItemClick: function(idx){
+        if (state.mapTool === 'erase'){ removeMapItem(idx); return; }
+        if (state.mapTool !== 'select'){ toast('ช่องนี้มีของวางอยู่แล้ว', true); return; }
+        state.mapSelected = idx;
+        render();
+      },
+      onCellClick: placeOnMap,
+      onInteract: function(on){ state.mapInteracting = on; }
+    });
+    wireZoomControls(panel, editMapCtrl);
+
+    panel.querySelectorAll('[data-tool]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.mapTool = btn.dataset.tool;
+        if (state.mapTool !== 'select') state.mapSelected = -1;
+        render();
+      });
+    });
+    panel.querySelectorAll('[data-placestall]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.mapPlaceStall = +btn.dataset.placestall;
+        state.mapTool = 'stall';
+        state.mapSelected = -1;
+        render();
+      });
+    });
+    var stallSearch = document.getElementById('mapStallSearch');
+    if (stallSearch){
+      stallSearch.addEventListener('input', function(){
+        var q = this.value.trim().toLowerCase();
+        panel.querySelectorAll('[data-placestall]').forEach(function(btn){
+          btn.hidden = q && btn.dataset.code.indexOf(q) === -1;
+        });
+      });
+    }
+    panel.querySelectorAll('[data-size]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var dims = btn.dataset.size.split('x');
+        state.mapPlaceSize = btn.dataset.size;
+        if (sel){
+          var resized = { x:sel.x, y:sel.y, w:+dims[0], h:+dims[1] };
+          if (!spotFree(L, resized, state.mapSelected)){ toast('ขยายไม่ได้ พื้นที่ข้างๆ ไม่ว่าง', true); return; }
+          sel.w = resized.w; sel.h = resized.h;
+          state.mapDirty = true;
+        }
+        render();
+      });
+    });
+    var labelInput = document.getElementById('mapLabel');
+    if (labelInput){
+      labelInput.addEventListener('input', function(){
+        sel.label = this.value.slice(0, 40);
+        state.mapDirty = true;
+        editMapCtrl.draw();
+        syncMapDirtyUi();
+      });
+    }
+    var removeBtn = document.getElementById('mapRemove');
+    if (removeBtn) removeBtn.addEventListener('click', function(){ removeMapItem(state.mapSelected); });
+
+    document.getElementById('mapResize').addEventListener('click', function(){
+      var cols = parseInt(document.getElementById('mapCols').value, 10);
+      var rows = parseInt(document.getElementById('mapRows').value, 10);
+      if (!(cols >= 4 && cols <= 60 && rows >= 4 && rows <= 60)){ toast('ขนาดต้องอยู่ระหว่าง 4–60 ช่อง', true); return; }
+      var fits = L.items.every(function(it){ return it.x + it.w <= cols && it.y + it.h <= rows; });
+      if (!fits){ toast('มีวัตถุอยู่นอกขนาดใหม่ ย้ายหรือลบออกก่อน', true); return; }
+      L.cols = cols; L.rows = rows;
+      state.mapDirty = true;
+      state.editView.fitted = false;
+      render();
+    });
+
+    var saveBtn = document.getElementById('mapSave');
+    saveBtn.addEventListener('click', function(){
+      saveBtn.disabled = true;
+      apiPut('/api/settings/map', { cols:L.cols, rows:L.rows, items:L.items })
+        .then(function(res){
+          state.settings.mapLayout = res.mapLayout;
+          state.mapDraft = cloneLayout(res.mapLayout);
+          state.mapDirty = false;
+          state.mapSelected = -1;
+          state.mapView.fitted = false;
+          toast('บันทึกแผนผังแล้ว');
+          render();
+        })
+        .catch(function(err){ toast(err.error || 'บันทึกแผนผังไม่สำเร็จ', true); saveBtn.disabled = false; });
+    });
+    document.getElementById('mapRevert').addEventListener('click', function(){
+      confirmAction('ยกเลิกการแก้ไขทั้งหมดที่ยังไม่ได้บันทึก?', function(){
+        state.mapDraft = null;
+        state.editView.fitted = false;
+        render();
+      }, 'ยกเลิกการแก้ไข');
+    });
+    document.getElementById('mapAuto').addEventListener('click', function(){
+      confirmAction('จัดวางล็อกทั้งหมดใหม่อัตโนมัติ? ตำแหน่งที่วางไว้จะถูกแทนที่ (ยังไม่บันทึกจนกว่าจะกดบันทึก)', function(){
+        state.mapDraft = withoutMissingStalls(autoLayout());
+        state.mapDirty = true;
+        state.mapSelected = -1;
+        state.editView.fitted = false;
+        render();
+      }, 'จัดวางใหม่');
+    });
+  }
+
   function renderSettingsAdmin(panel){
     var qrUrl = state.settings.promptPayQrUrl;
     panel.innerHTML = '<div class="card" style="padding:16px">' +
@@ -1322,6 +1693,8 @@
   loadPublicData();
   loadMyBookings();
   setInterval(function(){
+    var ae = document.activeElement;
+    if (state.mapInteracting || (ae && ae.matches && ae.matches('main input, main textarea'))) return;
     loadPublicData();
     if (state.activeTab==='mine') loadMyBookings();
     if (state.activeTab==='admin') refreshAdminData();
