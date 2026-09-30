@@ -63,6 +63,40 @@ router.get('/active', (req, res) => {
   res.json(rows);
 });
 
+// Admin: totals by rate type (guest = ขาจร, regular = ขาประจำ), optionally filtered by start_date range.
+router.get('/summary', requireAdmin, (req, res) => {
+  const { from, to } = req.query;
+  let where = "status = 'approved'";
+  const params = [];
+  if (from) { where += ' AND start_date >= ?'; params.push(from); }
+  if (to) { where += ' AND start_date <= ?'; params.push(to); }
+  const rows = db
+    .prepare(
+      `SELECT rate_type,
+         COUNT(*) as count,
+         SUM(deposit_amount) as total,
+         SUM(CASE WHEN payment_status='confirmed' THEN 1 ELSE 0 END) as confirmedCount,
+         SUM(CASE WHEN payment_status='confirmed' THEN deposit_amount ELSE 0 END) as confirmedTotal
+       FROM bookings WHERE ${where} GROUP BY rate_type`
+    )
+    .all(...params);
+  const result = {
+    guest: { count: 0, total: 0, confirmedCount: 0, confirmedTotal: 0 },
+    regular: { count: 0, total: 0, confirmedCount: 0, confirmedTotal: 0 }
+  };
+  rows.forEach((r) => {
+    if (result[r.rate_type]) {
+      result[r.rate_type] = {
+        count: r.count || 0,
+        total: r.total || 0,
+        confirmedCount: r.confirmedCount || 0,
+        confirmedTotal: r.confirmedTotal || 0
+      };
+    }
+  });
+  res.json(result);
+});
+
 // Vendor: own bookings (?vendorToken=). Admin: all bookings (optional ?status=).
 router.get('/', optionalAuth, (req, res) => {
   if (req.user && req.user.kind === 'admin') {
