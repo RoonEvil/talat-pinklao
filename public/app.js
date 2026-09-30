@@ -183,6 +183,14 @@
     return apiGet('/api/audit/fines').then(function(rows){ state.auditLogs = rows; render(); })
       .catch(function(err){ handleAuthError(err); });
   }
+  function loadSummary(){
+    var params = [];
+    if (state.summaryFrom) params.push('from=' + encodeURIComponent(state.summaryFrom));
+    if (state.summaryTo) params.push('to=' + encodeURIComponent(state.summaryTo));
+    var qs = params.length ? '?' + params.join('&') : '';
+    return apiGet('/api/bookings/summary' + qs).then(function(res){ state.summary = res; render(); })
+      .catch(function(err){ handleAuthError(err); });
+  }
   function handleAuthError(err){
     if (err && err.status === 401){
       toast('เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่', true);
@@ -200,6 +208,7 @@
     if (state.adminSection==='vendors') loadVendors();
     if (state.adminSection==='admins' && profile.isHeadAdmin) loadAdmins();
     if (state.adminSection==='audit') { loadAdminBookings(); loadAudit(state.auditDate || todayStr()); loadFines(); }
+    if (state.adminSection==='summary') loadSummary();
   }
 
   // ---------- render: shell ----------
@@ -779,7 +788,7 @@
       return;
     }
     var sections = [
-      ['approvals','อนุมัติคำขอ'], ['bookings','การจองทั้งหมด'], ['vendors','ผู้ขาย'],
+      ['approvals','อนุมัติคำขอ'], ['bookings','การจองทั้งหมด'], ['summary','สรุปยอด'], ['vendors','ผู้ขาย'],
       ['announcements','ประกาศ'], ['audit','ตรวจสอบตลาด'], ['zones','โซน'],
       ['stalls','ล็อก'], ['settings','ตั้งค่า']
     ];
@@ -814,6 +823,7 @@
     var panel = document.getElementById('adminPanel');
     if (state.adminSection==='approvals') renderApprovals(panel);
     else if (state.adminSection==='bookings') renderAllBookings(panel);
+    else if (state.adminSection==='summary') renderSummaryAdmin(panel);
     else if (state.adminSection==='vendors') renderVendorAdmin(panel);
     else if (state.adminSection==='announcements') renderAnnouncementAdmin(panel);
     else if (state.adminSection==='audit') renderAuditAdmin(panel);
@@ -894,6 +904,35 @@
     panel.querySelectorAll('[data-filt]').forEach(function(btn){
       btn.addEventListener('click', function(){ state.bookingsFilter = btn.dataset.filt; renderAllBookings(panel); });
     });
+  }
+
+  function renderSummaryAdmin(panel){
+    var from = state.summaryFrom || '';
+    var to = state.summaryTo || '';
+    var s = state.summary || { guest:{count:0,total:0,confirmedCount:0,confirmedTotal:0}, regular:{count:0,total:0,confirmedCount:0,confirmedTotal:0} };
+    var totalCount = (s.guest.count||0) + (s.regular.count||0);
+    var totalAmount = (s.guest.total||0) + (s.regular.total||0);
+    var totalConfirmedCount = (s.guest.confirmedCount||0) + (s.regular.confirmedCount||0);
+    var totalConfirmedAmount = (s.guest.confirmedTotal||0) + (s.regular.confirmedTotal||0);
+
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<div class="add-row">' +
+        '<div class="field"><label for="sumFrom">ตั้งแต่วันที่ (เริ่มจอง)</label><input type="date" id="sumFrom" value="'+esc(from)+'"></div>' +
+        '<div class="field"><label for="sumTo">ถึงวันที่</label><input type="date" id="sumTo" value="'+esc(to)+'"></div>' +
+        '<button type="button" class="btn ghost" id="sumClear">ล้างตัวกรอง</button>' +
+      '</div>' +
+      '<p class="muted small" style="margin:10px 0 0">นับเฉพาะการจองที่อนุมัติแล้ว (approved) กรองตามวันที่เริ่มจอง</p>' +
+      '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>ประเภทลูกค้า</th><th>จำนวนการจอง</th><th>ยอดมัดจำรวม</th><th>ยืนยันรับเงินแล้ว</th></tr></thead>' +
+      '<tbody>' +
+        '<tr><td>ขาจร (ราคาทั่วไป)</td><td>'+(s.guest.count||0)+'</td><td>'+fmtMoney(s.guest.total||0)+'</td><td>'+fmtMoney(s.guest.confirmedTotal||0)+' <span class="muted small">('+(s.guest.confirmedCount||0)+' รายการ)</span></td></tr>' +
+        '<tr><td>ขาประจำ (ราคาสมาชิก)</td><td>'+(s.regular.count||0)+'</td><td>'+fmtMoney(s.regular.total||0)+'</td><td>'+fmtMoney(s.regular.confirmedTotal||0)+' <span class="muted small">('+(s.regular.confirmedCount||0)+' รายการ)</span></td></tr>' +
+        '<tr style="font-weight:600"><td>รวมทั้งหมด</td><td>'+totalCount+'</td><td>'+fmtMoney(totalAmount)+'</td><td>'+fmtMoney(totalConfirmedAmount)+' <span class="muted small">('+totalConfirmedCount+' รายการ)</span></td></tr>' +
+      '</tbody></table></div>' +
+    '</div>';
+
+    document.getElementById('sumFrom').addEventListener('change', function(){ state.summaryFrom = this.value; loadSummary(); });
+    document.getElementById('sumTo').addEventListener('change', function(){ state.summaryTo = this.value; loadSummary(); });
+    document.getElementById('sumClear').addEventListener('click', function(){ state.summaryFrom = ''; state.summaryTo = ''; loadSummary(); });
   }
 
   function renderZoneAdmin(panel){
