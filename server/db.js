@@ -101,6 +101,11 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
 
+const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
+if (!settingsCols.includes('map_layout')) {
+  db.exec('ALTER TABLE settings ADD COLUMN map_layout TEXT');
+}
+
 function seed() {
   const zoneCount = db.prepare('SELECT COUNT(*) c FROM zones').get().c;
   if (zoneCount === 0) {
