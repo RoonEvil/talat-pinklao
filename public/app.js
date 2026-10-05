@@ -1653,12 +1653,129 @@
         ? '<button type="button" class="btn primary" id="qrUploadBtn">'+(qrUrl?'เปลี่ยน QR โค้ด':'อัปโหลด QR โค้ด')+'</button>'
         : '<span class="muted small">🔒 เฉพาะบัญชีแอดมินใหญ่เท่านั้นที่อัปโหลดหรือเปลี่ยนรูปนี้ได้</span>') +
       '</div>' +
+      '</div>' +
+      '<div class="card" style="padding:16px">' +
+        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">สำรองข้อมูล</h2></div>' +
+        (profile.isHeadAdmin
+          ? '<p class="muted small" style="margin:0 0 12px">ดาวน์โหลดข้อมูลทั้งหมด (การจอง ผู้ขาย บัญชี ผังตลาด ประกาศ และรูปสลิป/QR) เก็บไว้ในเครื่อง แนะนำให้ทำอย่างน้อยสัปดาห์ละครั้ง ' +
+            'ไฟล์นี้มีเบอร์โทรและรหัสผ่านที่เข้ารหัสแล้ว อย่าส่งต่อหรืออัปโหลดขึ้นที่สาธารณะ</p>' +
+            '<div class="row-actions" style="flex-wrap:wrap">' +
+              '<button type="button" class="btn primary" id="backupFull">ดาวน์โหลดไฟล์สำรอง (รวมรูป)</button>' +
+              '<button type="button" class="btn ghost" id="backupLite">ดาวน์โหลดแบบไม่รวมรูป</button>' +
+              '<button type="button" class="btn danger" id="backupRestore">กู้คืนจากไฟล์สำรอง</button>' +
+            '</div>'
+          : '<span class="muted small">🔒 เฉพาะบัญชีแอดมินใหญ่เท่านั้นที่สำรองและกู้คืนข้อมูลได้</span>') +
       '</div>';
 
     wireReceiptThumbs(panel);
     if (profile.isHeadAdmin){
       document.getElementById('qrUploadBtn').onclick = requestQrUpload;
+      document.getElementById('backupFull').onclick = function(){ downloadBackup(true, this); };
+      document.getElementById('backupLite').onclick = function(){ downloadBackup(false, this); };
+      document.getElementById('backupRestore').onclick = function(){ ensureRestoreInput().click(); };
     }
+  }
+
+  // ---------- backup / restore ----------
+  function downloadBackup(withImages, btn){
+    btn.disabled = true;
+    toast('กำลังเตรียมไฟล์สำรอง…');
+    fetch('/api/backup' + (withImages ? '' : '?images=0'), { headers: { 'Authorization': 'Bearer ' + authToken } })
+      .then(function(res){
+        if (!res.ok) return res.json().catch(function(){ return {}; }).then(function(d){ throw { status: res.status, error: d.error }; });
+        var name = ((res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'talat-pinklao-backup.json';
+        return res.blob().then(function(blob){ return { blob: blob, name: name }; });
+      })
+      .then(function(file){
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(file.blob);
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        toast('ดาวน์โหลดไฟล์สำรองแล้ว (' + Math.max(1, Math.round(file.blob.size / 1024)) + ' KB)');
+      })
+      .catch(function(err){ handleAuthError(err); toast((err && err.error) || 'สำรองข้อมูลไม่สำเร็จ', true); })
+      .then(function(){ btn.disabled = false; });
+  }
+
+  function ensureRestoreInput(){
+    var el = document.getElementById('restoreFileInput');
+    if (!el){
+      el = document.createElement('input');
+      el.type = 'file'; el.accept = '.json,application/json'; el.id = 'restoreFileInput'; el.hidden = true;
+      document.body.appendChild(el);
+      el.addEventListener('change', function(){
+        var file = el.files && el.files[0];
+        el.value = '';
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function(){
+          var backup;
+          try { backup = JSON.parse(reader.result); } catch(e){ toast('อ่านไฟล์ไม่ได้ — ไม่ใช่ไฟล์สำรองข้อมูล', true); return; }
+          if (!backup || backup.format !== 'talat-pinklao-backup' || !backup.tables){ toast('ไม่ใช่ไฟล์สำรองข้อมูลของระบบนี้', true); return; }
+          var t = backup.tables;
+          var count = function(name){ return Array.isArray(t[name]) ? t[name].length : 0; };
+          var files = Array.isArray(backup.files) ? backup.files : [];
+          var when = backup.createdAt ? new Date(backup.createdAt).toLocaleString('th-TH') : '-';
+          confirmAction(
+            'ข้อมูลปัจจุบันทั้งหมดจะถูกแทนที่ด้วยไฟล์สำรองวันที่ ' + when + ' ' +
+            '(การจอง ' + count('bookings') + ', ผู้ขาย ' + count('vendors') + ', ล็อก ' + count('stalls') + ', แอดมิน ' + count('admins') + ', รูป ' + files.length + ') ' +
+            (backup.includesImages ? '' : 'ไฟล์นี้ไม่มีรูป สลิปและ QR เดิมจะหาย ') +
+            'แนะนำให้ดาวน์โหลดไฟล์สำรองของข้อมูลปัจจุบันเก็บไว้ก่อน หลังกู้คืนต้องเข้าสู่ระบบใหม่',
+            function(){ runRestore(backup, files); },
+            'กู้คืนข้อมูล'
+          );
+        };
+        reader.onerror = function(){ toast('อ่านไฟล์ไม่ได้', true); };
+        reader.readAsText(file);
+      });
+    }
+    return el;
+  }
+
+  function runRestore(backup, files){
+    toast('กำลังกู้คืนข้อมูล…');
+    var payload = { format: backup.format, version: backup.version, createdAt: backup.createdAt, includesImages: backup.includesImages, tables: backup.tables };
+    var dataRestored = false;
+    apiPost('/api/backup/restore', payload).then(function(res){
+      dataRestored = true;
+      var uploadFiles = function(batch){
+        return fetch('/api/backup/restore-files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + res.restoreToken },
+          body: JSON.stringify({ files: batch })
+        }).then(function(r){
+          if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(d){ throw { error: d.error || 'อัปโหลดรูปไม่สำเร็จ' }; });
+          return r.json();
+        });
+      };
+      var batches = [], current = [], size = 0;
+      files.forEach(function(f){
+        var len = (f && f.data && f.data.length) || 0;
+        if (current.length && size + len > 4 * 1024 * 1024){ batches.push(current); current = []; size = 0; }
+        current.push(f); size += len;
+      });
+      if (current.length) batches.push(current);
+      return batches.reduce(function(chain, batch, i){
+        return chain.then(function(){
+          if (batches.length > 1) toast('กำลังกู้คืนรูป ' + (i + 1) + '/' + batches.length);
+          return uploadFiles(batch);
+        });
+      }, Promise.resolve());
+    }).then(function(){
+      toast('กู้คืนข้อมูลสำเร็จ กรุณาเข้าสู่ระบบใหม่');
+      signOutCompletely();
+      state.mapDraft = null; state.mapView.fitted = false; state.editView.fitted = false;
+      setTab('map');
+      loadPublicData();
+    }).catch(function(err){
+      if (dataRestored){
+        toast('ข้อมูลกู้คืนแล้ว แต่รูปบางส่วนยังไม่ครบ — กดกู้คืนจากไฟล์เดิมอีกครั้งได้', true);
+      } else {
+        toast((err && err.error) || 'กู้คืนไม่สำเร็จ ข้อมูลเดิมยังอยู่ครบ', true);
+      }
+    });
   }
 
   function renderAdminAccounts(panel){
