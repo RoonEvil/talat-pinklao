@@ -30,4 +30,4 @@ async function serveFile(req, res) {
   res.send(Buffer.from(row.data));
 }
 
-module.exports = { imageUpload, saveImage, serveFile };
+module.exports = { imageUpload, saveImage, serveFile, ALLOWED_TYPES };
