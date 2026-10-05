@@ -1,18 +1,18 @@
-# Free-tier note: Render's free web services use an EPHEMERAL disk — the
-# SQLite database and uploaded images reset on every redeploy or restart.
-# Fine for a demo; for real persistence, upgrade this service to a paid
-# plan and add a "disk:" block mounted at server/uploads (and move the
-# SQLite file there too), or swap SQLite for a hosted database.
+# Data lives in Postgres (Neon free tier), not on Render's disk, so it survives
+# redeploys and restarts. Set DATABASE_URL to the Neon connection string in
+# Render → talat-pinklao → Environment. The server refuses to start without it.
 services:
   - type: web
     name: talat-pinklao
     runtime: node
     plan: free
     rootDir: server
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     envVars:
       - key: JWT_SECRET
         generateValue: true
       - key: NODE_VERSION
         value: 20.18.1
+      - key: DATABASE_URL
+        sync: false
