@@ -816,6 +816,34 @@
   }
 
   // ---------- receipt / QR image upload ----------
+  // Phone photos are several MB; downscale in the browser so the free database doesn't fill up.
+  // QR codes stay PNG (lossless) so they remain scannable. Falls back to the original file on any failure.
+  function shrinkImage(file, maxDim, outType, quality){
+    var SMALL_ENOUGH = 400 * 1024;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= SMALL_ENOUGH) return Promise.resolve(file);
+    return new Promise(function(resolve){
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function(){
+        var scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.naturalWidth * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        var ctx = canvas.getContext('2d');
+        if (outType === 'image/jpeg'){ ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(function(blob){
+          if (!blob || blob.size >= file.size) return resolve(file);
+          var ext = outType === 'image/png' ? '.png' : '.jpg';
+          resolve(new File([blob], (file.name || 'image').replace(/\.[^.]+$/, '') + ext, { type: outType }));
+        }, outType, quality);
+      };
+      img.onerror = function(){ URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
+
   var pendingReceiptBookingId = null;
   function ensureReceiptInput(){
     var el = document.getElementById('receiptFileInput');
@@ -829,10 +857,12 @@
         var bookingId = pendingReceiptBookingId;
         pendingReceiptBookingId = null;
         if (!file || !bookingId) return;
-        var fd = new FormData();
-        fd.append('receipt', file);
         toast('กำลังอัปโหลดสลิป…');
-        apiUpload('/api/bookings/' + bookingId + '/receipt', fd)
+        shrinkImage(file, 1600, 'image/jpeg', 0.82).then(function(img){
+          var fd = new FormData();
+          fd.append('receipt', img, img.name || 'receipt.jpg');
+          return apiUpload('/api/bookings/' + bookingId + '/receipt', fd);
+        })
           .then(function(){ toast('แนบสลิปแล้ว'); loadMyBookings(); })
           .catch(function(err){ toast(err.error || 'แนบสลิปไม่สำเร็จ', true); });
       });
@@ -857,10 +887,12 @@
         var wanted = wantsQrUpload;
         wantsQrUpload = false;
         if (!file || !wanted) return;
-        var fd = new FormData();
-        fd.append('qr', file);
         toast('กำลังอัปโหลด QR โค้ด…');
-        apiUpload('/api/settings/qr', fd)
+        shrinkImage(file, 1200, 'image/png').then(function(img){
+          var fd = new FormData();
+          fd.append('qr', img, img.name || 'qr.png');
+          return apiUpload('/api/settings/qr', fd);
+        })
           .then(function(res){ state.settings.promptPayQrUrl = res.promptPayQrUrl; toast('อัปเดต QR พร้อมเพย์แล้ว'); render(); })
           .catch(function(err){ toast(err.error || 'อัปโหลด QR ไม่สำเร็จ', true); });
       });
