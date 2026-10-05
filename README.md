@@ -1,23 +1,32 @@
 # Talat Pinklao — Market Stall Booking System
 
 Online stall booking and market zoning for the hospital market at Somdech Phra Pinklao Hospital.
-A plain Node.js + Express + SQLite backend, with a static HTML/CSS/JS frontend — no framework,
-no build step. This replaces the earlier Claude Artifact version so that everyone who opens the
-link sees the exact same, always-current page.
+A plain Node.js + Express + PostgreSQL backend, with a static HTML/CSS/JS frontend — no framework,
+no build step. Everyone who opens the link sees the exact same, always-current page.
 
 ## What's in here
 
 ```
-server/            Express API + SQLite database
-  index.js         serves the API and the frontend
-  db.js            schema + seed data
+server/            Express API
+  index.js         serves the API, uploaded images (/files/...) and the frontend
+  db.js            Postgres connection, schema + seed data
+  files.js         image uploads (receipts, PromptPay QR) stored inside the database
   routes/          one file per resource (auth, zones, stalls, bookings, ...)
-  uploads/         payment receipts & the PromptPay QR image (created at runtime)
-public/            the frontend (index.html, styles.css, app.js)
+public/            the frontend (index.html, styles.css, isomap.js, app.js)
 render.yaml        one-click config for Render
 ```
 
-## Local setup (needs Node.js 18+)
+## Where the data lives
+
+All data — bookings, accounts, the market map, and uploaded images — is stored in a
+**PostgreSQL database on [Neon](https://neon.tech) (free tier)**, so nothing is lost when Render
+redeploys or restarts the server. The server reads the connection string from the
+`DATABASE_URL` environment variable and refuses to start on Render without it.
+
+Images are shrunk in the browser before upload (max 1600px), so a slip photo is typically
+200–300 KB. Neon's free 0.5 GB holds roughly a couple of thousand slips.
+
+## Local setup (needs Node.js 20)
 
 ```bash
 cd server
@@ -25,70 +34,45 @@ npm install
 npm start
 ```
 
-Then open http://localhost:4000 — the frontend and API are served from the same address.
-Head admin login is seeded automatically: **username `ongsa`, password `GGEZ`** — change the
-password once you're live (ระบบแอดมิน → แอดมิน doesn't support password changes yet; easiest
-is to create a new head admin account and deactivate the old one).
+Without `DATABASE_URL`, the server uses a local embedded Postgres (PGlite) stored in
+`server/.pgdata/` — handy for development. Open http://localhost:4000.
+
+Head admin login is seeded automatically: **username `ongsa`, password `GGEZ`** — change it once
+you're live (create a new head admin account and deactivate the old one).
 
 ## สรุปขั้นตอนคร่าวๆ (ไม่ต้องติดตั้ง git)
 
-1. สร้าง repo ใหม่บน GitHub (เว็บ ไม่ต้องใช้ git)
-2. ลากไฟล์ทั้งโฟลเดอร์นี้ขึ้น GitHub ผ่านหน้าเว็บ (Add file → Upload files)
-3. ไปที่ Render.com เชื่อมกับ GitHub repo ที่เพิ่งสร้าง แล้ว deploy
-4. ได้ลิงก์ถาวร เช่น `https://talat-pinklao.onrender.com` ที่ทุกคนเห็นหน้าเดียวกัน
+1. สร้าง repo บน GitHub แล้วอัปโหลดไฟล์ผ่านหน้าเว็บ (Add file → Upload files)
+2. สมัคร Neon (ฟรี) สร้างโปรเจกต์ แล้วคัดลอก connection string
+3. ที่ Render เชื่อมกับ GitHub repo แล้วใส่ connection string เป็น `DATABASE_URL` ในหน้า Environment
+4. ได้ลิงก์ถาวร เช่น `https://talat-pinklao.onrender.com` และข้อมูลไม่หายเมื่อ deploy ใหม่
 
-รายละเอียดแต่ละขั้นด้านล่าง (เป็นภาษาอังกฤษ เพราะ UI ของเว็บเป็นภาษาอังกฤษ)
+## Step 1 — Create the database on Neon
 
-## Step 1 — Put this code on GitHub (no git install needed)
-
-1. Go to [github.com/new](https://github.com/new), sign in, and create a new repository
-   (e.g. `talat-pinklao`). Keep it **Public** or **Private** — either works with Render.
-   Don't add a README/gitignore from GitHub's own template — we already have ours.
-2. On the new repo's page, click **"uploading an existing file"** (or **Add file → Upload files**).
-3. Drag this entire project folder's contents in. Modern GitHub upload accepts whole folders
-   dragged from your file explorer — drag the `server` folder, the `public` folder, and the
-   loose files (`.gitignore`, `render.yaml`, `README.md`) all together into the upload area.
-4. Scroll down and click **Commit changes**.
-5. **Do not upload `server/node_modules`** if you happen to have one locally — it's huge and
-   Render installs dependencies itself from `package.json`. The `.gitignore` in this project
-   already excludes it if you ever do use git.
+1. Sign up at [neon.tech](https://neon.tech) (free, no credit card).
+2. Create a project (any name; pick the region closest to your Render service, e.g. Singapore
+   or US West to match Render's Oregon region).
+3. On the project dashboard click **Connect**, keep **Connection pooling** on, and copy the
+   connection string. It looks like
+   `postgresql://user:password@ep-xxxx-pooler.region.aws.neon.tech/neondb?sslmode=require`.
+   Treat it like a password — never commit it to GitHub.
 
 ## Step 2 — Deploy on Render
 
-1. Go to [render.com](https://render.com) and sign up / log in (you can use your GitHub account).
-2. Click **New +** → **Blueprint**, and connect the GitHub repo you just created. Render will
-   read `render.yaml` automatically and pre-fill everything (Node service, build/start commands,
-   a generated `JWT_SECRET`).
-   - If Blueprint isn't available on your plan, use **New +** → **Web Service** instead, pick the
-     repo, and set: **Root Directory** = `server`, **Build Command** = `npm install`,
-     **Start Command** = `npm start`. Add an environment variable `JWT_SECRET` set to any long
-     random string yourself.
-3. Click **Create/Deploy**. The first build takes a few minutes (installing `better-sqlite3`
-   compiles a small native module — this is normal).
-4. Once it's live, Render gives you a permanent URL like `https://talat-pinklao.onrender.com`.
-   That's the one link to share — everyone sees the same, current version, no Claude sign-in
-   required.
+1. On [render.com](https://render.com), **New +** → **Blueprint**, connect the GitHub repo.
+   Render reads `render.yaml` (Node service, build/start commands, a generated `JWT_SECRET`).
+2. Open the service → **Environment** → add `DATABASE_URL` = the Neon connection string → **Save**.
+3. Deploy. The server creates all tables and seed data on first start.
+4. If a push doesn't trigger a deploy (Render's auto-deploy occasionally stalls after several
+   quick commits), use **Manual Deploy → Deploy latest commit**.
 
-### Known limitation: free-tier storage is temporary
-
-Render's **free** web services use disk storage that resets whenever the service restarts,
-redeploys, or spins down from inactivity (free services sleep after ~15 minutes idle and wake
-on the next visit, which takes ~30–60 seconds). That means bookings, uploaded receipts, and the
-QR image can disappear after a period of inactivity. For a class demo this is usually fine —
-just re-open the link before showing it. If you need bookings to persist for real, upgrade the
-Render service to a paid plan and add a persistent disk (see the comment in `render.yaml`), or
-swap SQLite for a hosted database later.
-
-## Updating the site later
-
-Whenever you want to change something: edit the files, then on GitHub's web UI open the changed
-file and use the pencil (edit) icon, or use "Add file → Upload files" again to overwrite it and
-commit. Render redeploys automatically on every push to the connected branch.
+Free Render services sleep after ~15 minutes idle; the first visit afterwards takes ~30–60 s.
+Data is safe either way — it lives in Neon.
 
 ## Accounts
 
 - **Head admin** (seeded automatically): username `ongsa`, password `GGEZ`. Can manage staff
   accounts (ระบบแอดมิน → แอดมิน) and upload the PromptPay QR code (ระบบแอดมิน → ตั้งค่า).
-- **Staff accounts**: created by the head admin from ระบบแอดมิน → แอดมิน.
-- **Vendors**: anyone can browse and book as a guest (no account), or register an account from
-  the "เข้าสู่ระบบ" button to have their booking history follow them across devices.
+- **Staff accounts**: created by the head admin. Deactivating one takes effect immediately.
+- **Vendors**: book as a guest (bookings tied to that browser) or register an account from the
+  "เข้าสู่ระบบ" button so their bookings follow them across devices.
