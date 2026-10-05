@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const db = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
@@ -21,11 +22,19 @@ function requireAdmin(req, res, next) {
   if (!token) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อน' });
   try {
     req.admin = jwt.verify(token, JWT_SECRET);
-    if (req.admin.kind !== 'admin') return res.status(403).json({ error: 'สำหรับเจ้าหน้าที่เท่านั้น' });
-    next();
   } catch (e) {
     return res.status(401).json({ error: 'เซสชันไม่ถูกต้องหรือหมดอายุ' });
   }
+  if (req.admin.kind !== 'admin') return res.status(403).json({ error: 'สำหรับเจ้าหน้าที่เท่านั้น' });
+  // Re-check the account so deactivated or demoted staff lose access immediately, not when the JWT expires.
+  db
+    .get('SELECT role, active FROM admins WHERE username = ?', [req.admin.id])
+    .then((row) => {
+      if (!row || !row.active) return res.status(401).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
+      req.admin.role = row.role;
+      next();
+    })
+    .catch(next);
 }
 
 function requireHeadAdmin(req, res, next) {
