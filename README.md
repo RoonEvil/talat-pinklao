@@ -69,6 +69,18 @@ you're live (create a new head admin account and deactivate the old one).
 Free Render services sleep after ~15 minutes idle; the first visit afterwards takes ~30–60 s.
 Data is safe either way — it lives in Neon.
 
+## Backups
+
+Head admins can back up and restore everything from **ระบบแอดมิน → ตั้งค่า → สำรองข้อมูล**:
+
+- **ดาวน์โหลดไฟล์สำรอง** saves one `.json` file with every table and all images (or a smaller
+  file without images). Keep it somewhere private — it contains phone numbers and password hashes.
+- **กู้คืนจากไฟล์สำรอง** replaces *all* current data with the file's contents. The data step is
+  all-or-nothing (a bad file changes nothing); images are then uploaded in batches and the step
+  can be repeated safely. A file with no active head admin is refused so you can't lock yourself out.
+
+Download a backup regularly (e.g. weekly) and before any big change.
+
 ## Accounts
 
 - **Head admin** (seeded automatically): username `ongsa`, password `GGEZ`. Can manage staff
