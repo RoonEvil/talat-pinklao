@@ -130,7 +130,7 @@ router.get('/', requireAdmin, wrap(async (req, res) => {
 router.post('/', optionalAuth, wrap(async (req, res) => {
   const {
     stallId, vendorName, vendorPhone, category,
-    startDate, endDate, note, paymentMethod, alreadyPaid
+    startDate, endDate, note
   } = req.body || {};
   const isVendorLogin = req.user && req.user.kind === 'vendor';
   const vendorToken = isVendorLogin ? req.user.id : (req.body || {}).vendorToken;
@@ -170,8 +170,8 @@ router.post('/', optionalAuth, wrap(async (req, res) => {
     [
       stallId, stall.zone_id, vendorToken, vendorName, vendorPhone, category || 'other',
       startDate, endDate, note || null,
-      depositAmount, isRegular ? 'regular' : 'guest', paymentMethod || 'cash',
-      alreadyPaid ? 'paid' : 'unpaid'
+      // Payment is chosen and made after approval, so every new booking starts unpaid.
+      depositAmount, isRegular ? 'regular' : 'guest', 'promptpay', 'unpaid'
     ]
   );
 
@@ -204,8 +204,11 @@ router.put('/:id/status', requireAdmin, wrap(async (req, res) => {
   res.json(await bookingWithMeta(booking.id));
 }));
 
+const PAYMENT_METHODS = ['promptpay', 'bank', 'cash'];
+
+// Flow: booking approved → vendor pays and reports it ('paid') → vendor attaches slip → staff confirms.
 router.put('/:id/payment', optionalAuth, loadOwnedBooking, wrap(async (req, res) => {
-  const { paymentStatus } = req.body || {};
+  const { paymentStatus, paymentMethod } = req.body || {};
   const isAdmin = req.user && req.user.kind === 'admin';
   if (paymentStatus === 'confirmed' && !isAdmin) {
     return res.status(403).json({ error: 'เฉพาะเจ้าหน้าที่ตลาดเท่านั้นที่ยืนยันการรับเงินได้' });
@@ -213,14 +216,30 @@ router.put('/:id/payment', optionalAuth, loadOwnedBooking, wrap(async (req, res)
   if (!['paid', 'confirmed'].includes(paymentStatus)) {
     return res.status(400).json({ error: 'สถานะการชำระเงินไม่ถูกต้อง' });
   }
-  await db.run('UPDATE bookings SET payment_status=? WHERE id=?', [paymentStatus, req.booking.id]);
+  if (req.booking.status !== 'approved') {
+    return res.status(400).json({ error: 'ชำระเงินได้หลังเจ้าหน้าที่อนุมัติการจองแล้วเท่านั้น' });
+  }
+  if (paymentMethod != null && !PAYMENT_METHODS.includes(paymentMethod)) {
+    return res.status(400).json({ error: 'วิธีการชำระเงินไม่ถูกต้อง' });
+  }
+  await db.run('UPDATE bookings SET payment_status=?, payment_method=COALESCE(?, payment_method) WHERE id=?', [
+    paymentStatus, paymentMethod || null, req.booking.id
+  ]);
   res.json(await bookingWithMeta(req.booking.id));
 }));
 
-router.post('/:id/receipt', optionalAuth, loadOwnedBooking, imageUpload('receipt', 8 * 1024 * 1024), wrap(async (req, res) => {
+const requireReportedPayment = (req, res, next) => {
+  const isAdmin = req.user && req.user.kind === 'admin';
+  if (!isAdmin && !(req.booking.status === 'approved' && req.booking.payment_status === 'paid')) {
+    return res.status(400).json({ error: 'แนบสลิปได้หลังกด "โอนเงินแล้ว" เท่านั้น' });
+  }
+  next();
+};
+
+router.post('/:id/receipt', optionalAuth, loadOwnedBooking, requireReportedPayment, imageUpload('receipt', 8 * 1024 * 1024), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์รูป JPG, PNG, WEBP หรือ GIF' });
   const receiptPath = await saveImage(req.file);
-  await db.run("UPDATE bookings SET receipt_path=?, payment_status='paid' WHERE id=?", [receiptPath, req.booking.id]);
+  await db.run('UPDATE bookings SET receipt_path=? WHERE id=?', [receiptPath, req.booking.id]);
   if (req.booking.receipt_path && req.booking.receipt_path.startsWith('/files/')) {
     await db.run('DELETE FROM files WHERE id = ?', [req.booking.receipt_path.replace('/files/', '')]);
   }
@@ -228,6 +247,13 @@ router.post('/:id/receipt', optionalAuth, loadOwnedBooking, imageUpload('receipt
 }));
 
 router.delete('/:id', optionalAuth, loadOwnedBooking, wrap(async (req, res) => {
+  const isAdmin = req.user && req.user.kind === 'admin';
+  if (!['pending', 'approved'].includes(req.booking.status)) {
+    return res.status(400).json({ error: 'การจองนี้ถูกยกเลิกหรือปฏิเสธไปแล้ว' });
+  }
+  if (!isAdmin && req.booking.payment_status !== 'unpaid') {
+    return res.status(400).json({ error: 'ชำระเงินแล้ว ยกเลิกเองไม่ได้ กรุณาติดต่อเจ้าหน้าที่ตลาด' });
+  }
   await db.run("UPDATE bookings SET status='cancelled', decided_at=NOW() WHERE id=?", [req.booking.id]);
   res.json({ ok: true });
 }));
