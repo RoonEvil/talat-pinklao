@@ -40,6 +40,31 @@ function hasOverlap(stallId, startDate, endDate, statuses, excludeId) {
   return row.c > 0;
 }
 
+function isRegisteredVendor(id) {
+  const v = db.prepare('SELECT password_hash FROM vendors WHERE id = ?').get(id);
+  return !!(v && v.password_hash);
+}
+
+// Registered vendors must prove identity with their JWT. Guests prove it with the random
+// token their browser holds (X-Vendor-Token); a registered vendor's username is never accepted there.
+function requesterToken(req) {
+  if (req.user && req.user.kind === 'vendor') return req.user.id;
+  const token = req.get('x-vendor-token');
+  if (!token || isRegisteredVendor(token)) return null;
+  return token;
+}
+
+function loadOwnedBooking(req, res, next) {
+  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+  const isAdmin = req.user && req.user.kind === 'admin';
+  if (!isAdmin && requesterToken(req) !== booking.vendor_token) {
+    return res.status(403).json({ error: 'ไม่มีสิทธิ์จัดการการจองนี้' });
+  }
+  req.booking = booking;
+  next();
+}
+
 function bookingWithMeta(id) {
   return db
     .prepare(
@@ -97,36 +122,40 @@ router.get('/summary', requireAdmin, (req, res) => {
   res.json(result);
 });
 
-// Vendor: own bookings (?vendorToken=). Admin: all bookings (optional ?status=).
-router.get('/', optionalAuth, (req, res) => {
-  if (req.user && req.user.kind === 'admin') {
-    const status = req.query.status;
-    const base = `SELECT b.*, s.code as stall_code, z.name as zone_name FROM bookings b
-      JOIN stalls s ON s.id = b.stall_id JOIN zones z ON z.id = b.zone_id`;
-    const rows = status
-      ? db.prepare(`${base} WHERE b.status = ? ORDER BY b.created_at DESC`).all(status)
-      : db.prepare(`${base} ORDER BY b.created_at DESC`).all();
-    return res.json(rows);
-  }
-  const vendorToken = req.query.vendorToken;
-  if (!vendorToken) return res.status(400).json({ error: 'กรุณาระบุ vendorToken' });
+router.get('/mine', optionalAuth, (req, res) => {
+  const token = requesterToken(req);
+  if (!token) return res.json([]);
   const rows = db
     .prepare(
       `SELECT b.*, s.code as stall_code, z.name as zone_name FROM bookings b
        JOIN stalls s ON s.id = b.stall_id JOIN zones z ON z.id = b.zone_id
        WHERE b.vendor_token = ? ORDER BY b.created_at DESC`
     )
-    .all(vendorToken);
+    .all(token);
   res.json(rows);
 });
 
-router.post('/', (req, res) => {
+router.get('/', requireAdmin, (req, res) => {
+  const status = req.query.status;
+  const base = `SELECT b.*, s.code as stall_code, z.name as zone_name FROM bookings b
+    JOIN stalls s ON s.id = b.stall_id JOIN zones z ON z.id = b.zone_id`;
+  const rows = status
+    ? db.prepare(`${base} WHERE b.status = ? ORDER BY b.created_at DESC`).all(status)
+    : db.prepare(`${base} ORDER BY b.created_at DESC`).all();
+  res.json(rows);
+});
+
+router.post('/', optionalAuth, (req, res) => {
   const {
-    stallId, vendorToken, vendorName, vendorPhone, category,
+    stallId, vendorName, vendorPhone, category,
     startDate, endDate, note, paymentMethod, alreadyPaid
   } = req.body || {};
+  const vendorToken = req.user && req.user.kind === 'vendor' ? req.user.id : (req.body || {}).vendorToken;
   if (!stallId || !vendorToken || !vendorName || !vendorPhone || !startDate || !endDate) {
     return res.status(400).json({ error: 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ' });
+  }
+  if (!(req.user && req.user.kind === 'vendor') && isRegisteredVendor(vendorToken)) {
+    return res.status(403).json({ error: 'กรุณาเข้าสู่ระบบบัญชีนี้ก่อนจอง' });
   }
   if (endDate < startDate) return res.status(400).json({ error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม' });
 
@@ -189,9 +218,7 @@ router.put('/:id/status', requireAdmin, (req, res) => {
   res.json(bookingWithMeta(req.params.id));
 });
 
-router.put('/:id/payment', optionalAuth, (req, res) => {
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+router.put('/:id/payment', optionalAuth, loadOwnedBooking, (req, res) => {
   const { paymentStatus } = req.body || {};
   const isAdmin = req.user && req.user.kind === 'admin';
   if (paymentStatus === 'confirmed' && !isAdmin) {
@@ -204,18 +231,14 @@ router.put('/:id/payment', optionalAuth, (req, res) => {
   res.json(bookingWithMeta(req.params.id));
 });
 
-router.post('/:id/receipt', upload.single('receipt'), (req, res) => {
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+router.post('/:id/receipt', optionalAuth, loadOwnedBooking, upload.single('receipt'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'ไม่มีรูปภาพที่อัปโหลด' });
   const receiptPath = `/uploads/receipts/${req.file.filename}`;
   db.prepare("UPDATE bookings SET receipt_path=?, payment_status='paid' WHERE id=?").run(receiptPath, req.params.id);
   res.json(bookingWithMeta(req.params.id));
 });
 
-router.delete('/:id', (req, res) => {
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
-  if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+router.delete('/:id', optionalAuth, loadOwnedBooking, (req, res) => {
   db.prepare("UPDATE bookings SET status='cancelled', decided_at=datetime('now') WHERE id=?").run(req.params.id);
   res.json({ ok: true });
 });
