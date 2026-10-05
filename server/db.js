@@ -153,6 +153,18 @@ const SCHEMA = [
   )`
 ];
 
+// Column lists used by backup/restore, in foreign-key-safe insert order. Keep in sync with SCHEMA.
+db.TABLES = [
+  { name: 'admins', serial: false, cols: ['username', 'name', 'password_hash', 'role', 'active', 'created_at'] },
+  { name: 'vendors', serial: false, cols: ['id', 'name', 'phone', 'category', 'password_hash', 'active', 'is_regular', 'joined_at', 'last_booking_at'] },
+  { name: 'zones', serial: true, cols: ['id', 'name', 'description', 'color_index', 'sort_order'] },
+  { name: 'stalls', serial: true, cols: ['id', 'zone_id', 'code', 'size_sqm', 'category', 'price_per_day', 'regular_price_per_day', 'pos_row', 'pos_col', 'active'] },
+  { name: 'bookings', serial: true, cols: ['id', 'stall_id', 'zone_id', 'vendor_token', 'vendor_name', 'vendor_phone', 'category', 'start_date', 'end_date', 'note', 'deposit_amount', 'rate_type', 'payment_method', 'payment_status', 'receipt_path', 'status', 'created_at', 'decided_at'] },
+  { name: 'announcements', serial: true, cols: ['id', 'title', 'type', 'body', 'pinned', 'created_at'] },
+  { name: 'audit_logs', serial: false, cols: ['id', 'booking_id', 'stall_id', 'stall_code', 'zone_id', 'date', 'vendor_name', 'present', 'category_match', 'fine_amount', 'fine_reason', 'recorded_at'] },
+  { name: 'settings', serial: false, cols: ['id', 'prompt_pay_qr_path', 'map_layout'] }
+];
+
 async function seed() {
   const zoneCount = (await db.get('SELECT COUNT(*)::int AS c FROM zones')).c;
   if (zoneCount === 0) {
