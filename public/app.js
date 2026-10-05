@@ -70,6 +70,7 @@
     var isForm = (typeof FormData !== 'undefined') && options.body instanceof FormData;
     if (!isForm) headers['Content-Type'] = 'application/json';
     if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+    if (profile && profile.vendorToken) headers['X-Vendor-Token'] = profile.vendorToken;
     return fetch(path, Object.assign({}, options, { headers: headers })).then(function(res){
       return res.text().then(function(text){
         var data = {};
@@ -157,7 +158,7 @@
   }
 
   function loadMyBookings(){
-    return apiGet('/api/bookings?vendorToken=' + encodeURIComponent(profile.vendorToken)).then(function(rows){
+    return apiGet('/api/bookings/mine').then(function(rows){
       state.myBookings = rows;
       state.myBookingsLoaded = true;
       render();
@@ -232,9 +233,12 @@
         '<span class="pill on-accent">'+esc(profile.adminName||'แอดมิน')+' · '+(profile.isHeadAdmin?'แอดมินใหญ่':'เจ้าหน้าที่')+'</span>' +
         '<button class="btn ghost small" id="logoutBtn">ออกจากระบบ</button>';
       document.getElementById('logoutBtn').onclick = function(){
-        profile.isAdmin = false; profile.isHeadAdmin = false; profile.adminName=''; profile.adminUsername=''; saveProfile(); saveToken(null);
+        signOutCompletely();
+        state.myBookings = [];
         if (state.activeTab==='admin') setTab('map');
+        toast('ออกจากระบบแล้ว');
         render();
+        loadMyBookings();
       };
     } else if (profile.isRegistered){
       el.innerHTML =
