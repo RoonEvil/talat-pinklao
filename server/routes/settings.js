@@ -1,22 +1,10 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
 const db = require('../db');
+const wrap = require('../wrap');
+const { imageUpload, saveImage } = require('../files');
 const { requireAdmin, requireHeadAdmin } = require('../middleware/auth');
 
 const router = express.Router();
-
-const uploadDir = path.join(__dirname, '..', 'uploads', 'settings');
-fs.mkdirSync(uploadDir, { recursive: true });
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: uploadDir,
-    filename: (req, file, cb) => cb(null, `promptpay-qr-${Date.now()}${path.extname(file.originalname || '')}`)
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
-});
 
 const MAP_KINDS = new Set(['stall', 'entrance', 'toilet', 'tree', 'stage', 'parking', 'text', 'object']);
 
@@ -49,26 +37,30 @@ function sanitizeLayout(body) {
   return { cols, rows, items };
 }
 
-router.get('/', (req, res) => {
-  const row = db.prepare('SELECT prompt_pay_qr_path, map_layout FROM settings WHERE id = 1').get();
+router.get('/', wrap(async (req, res) => {
+  const row = await db.get('SELECT prompt_pay_qr_path, map_layout FROM settings WHERE id = 1');
   res.json({
     promptPayQrUrl: row?.prompt_pay_qr_path || null,
     mapLayout: parseLayout(row?.map_layout)
   });
-});
+}));
 
-router.post('/qr', requireHeadAdmin, upload.single('qr'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'ไม่มีรูปภาพที่อัปโหลด' });
-  const qrPath = `/uploads/settings/${req.file.filename}`;
-  db.prepare('UPDATE settings SET prompt_pay_qr_path = ? WHERE id = 1').run(qrPath);
+router.post('/qr', requireHeadAdmin, imageUpload('qr', 5 * 1024 * 1024), wrap(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์รูป JPG, PNG, WEBP หรือ GIF' });
+  const qrPath = await saveImage(req.file);
+  const old = await db.get('SELECT prompt_pay_qr_path FROM settings WHERE id = 1');
+  await db.run('UPDATE settings SET prompt_pay_qr_path = ? WHERE id = 1', [qrPath]);
+  if (old && old.prompt_pay_qr_path) {
+    await db.run('DELETE FROM files WHERE id = ?', [old.prompt_pay_qr_path.replace('/files/', '')]);
+  }
   res.json({ promptPayQrUrl: qrPath });
-});
+}));
 
-router.put('/map', requireAdmin, (req, res) => {
+router.put('/map', requireAdmin, wrap(async (req, res) => {
   const layout = sanitizeLayout(req.body);
   if (!layout) return res.status(400).json({ error: 'ข้อมูลแผนผังไม่ถูกต้อง' });
-  db.prepare('UPDATE settings SET map_layout = ? WHERE id = 1').run(JSON.stringify(layout));
+  await db.run('UPDATE settings SET map_layout = ? WHERE id = 1', [JSON.stringify(layout)]);
   res.json({ mapLayout: layout });
-});
+}));
 
 module.exports = router;
