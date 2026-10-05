@@ -1,10 +1,6 @@
 node_modules/
 server/node_modules/
-server/market.db
-server/market.db-journal
-server/market.db-wal
-server/market.db-shm
-server/uploads/
+server/.pgdata/
 .env
 .DS_Store
 Thumbs.db
