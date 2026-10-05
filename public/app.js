@@ -1,7 +1,6 @@
 (function(){
   "use strict";
 
-  var DAY = 24*60*60*1000;
   var TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   function todayStr(){ return new Date().toISOString().slice(0,10); }
   function fmtDate(s){
@@ -19,12 +18,6 @@
     });
   }
   function overlaps(aStart,aEnd,bStart,bEnd){ return aStart <= bEnd && aEnd >= bStart; }
-  function countDays(start,end){
-    var s = new Date(start+'T00:00:00');
-    var e = new Date(end+'T00:00:00');
-    var n = Math.round((e-s)/DAY) + 1;
-    return n > 0 ? n : 1;
-  }
   function sanitizeUsername(u){ return String(u||'').toLowerCase().replace(/[^a-z0-9_\-]/g,''); }
 
   var ZONE_COLORS = ['var(--zone-1)','var(--zone-2)','var(--zone-3)','var(--zone-4)'];
@@ -530,9 +523,6 @@
     var catOptions = CATEGORIES.map(function(c){
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
-    var payOptions = PAYMENT_METHODS.map(function(m){
-      return '<option value="'+m.id+'">'+esc(m.label)+'</option>';
-    }).join('');
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
@@ -547,15 +537,7 @@
           '<div class="field"><label for="bfEnd">วันที่สิ้นสุด</label><input type="date" id="bfEnd" required min="'+minDate+'" value="'+minDate+'"></div>' +
         '</div>' +
         '<div class="field"><label for="bfNote">ข้อความถึงเจ้าหน้าที่ตลาด (ถ้ามี)</label><textarea id="bfNote" rows="2" placeholder="เช่น ขายลูกชิ้นปิ้ง ต้องการปลั๊กไฟ"></textarea></div>' +
-        '<div class="deposit-box">' +
-          '<div class="deposit-row"><span id="depositLabel">ค่ามัดจำการจอง (1 วัน)</span><strong id="depositAmount">'+fmtMoney(stall.price_per_day)+'</strong></div>' +
-          (state.settings.promptPayQrUrl
-            ? '<div class="qr-scan" id="qrScanBlock" '+(PAYMENT_METHODS[0].id!=='promptpay'?'hidden':'')+'><img class="receipt-thumb" style="width:120px;height:120px" src="'+esc(state.settings.promptPayQrUrl)+'" data-full="'+esc(state.settings.promptPayQrUrl)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ แตะเพื่อขยาย"><span class="muted small">สแกนด้วยแอปธนาคาร แล้วติ๊กด้านล่าง</span></div>'
-            : '') +
-          '<div class="field" style="margin-top:10px"><label for="bfPayMethod">วิธีการชำระเงิน</label><select id="bfPayMethod">'+payOptions+'</select></div>' +
-          '<label class="checkline"><input type="checkbox" id="bfPaid"> ฉันโอนเงินมัดจำแล้ว</label>' +
-          '<p class="deposit-note">ถ้ายังไม่จ่าย สามารถกดยืนยันได้ที่ "การจองของฉัน" หลังโอนเงิน — เจ้าหน้าที่จะตรวจสอบและยืนยันอีกครั้ง '+(isRegistered?'':'สมาชิกที่ลงทะเบียน/ลูกค้าประจำจะได้ราคาพิเศษโดยอัตโนมัติ')+'</p>' +
-        '</div>' +
+        '<p class="deposit-note">ยังไม่ต้องจ่ายเงินตอนนี้ — เมื่อเจ้าหน้าที่อนุมัติแล้ว ปุ่ม "ชำระเงิน" จะขึ้นในหน้า "การจองของฉัน" '+(isRegistered?'':'สมาชิกที่ลงทะเบียน/ลูกค้าประจำจะได้ราคาพิเศษโดยอัตโนมัติ')+'</p>' +
         '<div class="form-error" id="bfErr"></div>' +
         '<div class="form-actions">' +
           '<button type="button" class="btn ghost" id="bfCancel">ยกเลิก</button>' +
@@ -567,22 +549,6 @@
     var back = document.getElementById('mb');
     back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
     document.getElementById('bfCancel').onclick = closeModal;
-    wireReceiptThumbs(root);
-    var qrScanBlock = document.getElementById('qrScanBlock');
-    if (qrScanBlock){
-      document.getElementById('bfPayMethod').addEventListener('change', function(){
-        qrScanBlock.hidden = this.value !== 'promptpay';
-      });
-    }
-    function refreshDeposit(){
-      var s = document.getElementById('bfStart').value;
-      var e = document.getElementById('bfEnd').value;
-      var days = (s && e && e >= s) ? countDays(s, e) : 1;
-      document.getElementById('depositLabel').textContent = 'ค่ามัดจำการจอง (' + days + ' วัน, คำนวณโดยระบบ)';
-      document.getElementById('depositAmount').textContent = '~' + fmtMoney(stall.price_per_day * days) + ' (แสดงราคาทั่วไป)';
-    }
-    document.getElementById('bfStart').addEventListener('change', refreshDeposit);
-    document.getElementById('bfEnd').addEventListener('change', refreshDeposit);
     document.getElementById('bookForm').addEventListener('submit', function(e){
       e.preventDefault();
       var name = document.getElementById('bfName').value.trim();
@@ -591,8 +557,6 @@
       var start = document.getElementById('bfStart').value;
       var end = document.getElementById('bfEnd').value;
       var note = document.getElementById('bfNote').value.trim();
-      var payMethod = document.getElementById('bfPayMethod').value;
-      var paid = document.getElementById('bfPaid').checked;
       var errEl = document.getElementById('bfErr');
       var submitBtn = e.target.querySelector('button[type=submit]');
       if (!name || !phone || !start || !end){ errEl.textContent = 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ'; return; }
@@ -603,8 +567,7 @@
 
       apiPost('/api/bookings', {
         stallId: stall.id, vendorToken: profile.vendorToken, vendorName: name, vendorPhone: phone,
-        category: category, startDate: start, endDate: end, note: note || null,
-        paymentMethod: payMethod, alreadyPaid: paid
+        category: category, startDate: start, endDate: end, note: note || null
       }).then(function(){
         toast('ส่งคำขอจองล็อก ' + stall.code + ' แล้ว');
         closeModal();
@@ -774,19 +737,26 @@
       return;
     }
     var rows = mine.map(function(b){
-      var canCancel = (b.status==='pending' || b.status==='approved') && b.end_date >= todayStr();
       var payStatus = b.payment_status || 'unpaid';
-      var canMarkPaid = payStatus==='unpaid' && b.status!=='cancelled' && b.status!=='rejected';
-      var canAttachReceipt = b.status!=='cancelled' && b.status!=='rejected';
+      var approved = b.status === 'approved';
+      var upcoming = b.end_date >= todayStr();
+      var canCancel = (b.status==='pending' || approved) && upcoming && payStatus === 'unpaid';
+      var canPay = approved && upcoming && payStatus === 'unpaid';
+      var canAttachReceipt = approved && payStatus === 'paid' && b.payment_method !== 'cash';
+      var hint = '';
+      if (b.status === 'pending') hint = 'รอเจ้าหน้าที่อนุมัติก่อนชำระเงิน';
+      else if (approved && payStatus === 'paid') hint = b.payment_method === 'cash' ? 'แจ้งชำระเงินสดแล้ว — รอเจ้าหน้าที่ยืนยัน' : (b.receipt_path ? 'ส่งสลิปแล้ว — รอเจ้าหน้าที่ยืนยัน' : 'กรุณาแนบสลิปเพื่อให้เจ้าหน้าที่ตรวจสอบ');
+      else if (approved && payStatus === 'confirmed') hint = 'เจ้าหน้าที่ยืนยันรับเงินแล้ว';
       return '<div class="booking-row">' +
         '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+'</div>' +
-        '<div class="stalltag">'+fmtMoney(b.deposit_amount)+' มัดจำ · ราคา'+esc(rateLabel(b.rate_type))+'</div></div>' +
+        '<div class="stalltag">ค่าเช่า '+fmtMoney(b.deposit_amount)+' · ราคา'+esc(rateLabel(b.rate_type))+'</div>' +
+        (hint ? '<div class="muted small">'+esc(hint)+'</div>' : '') + '</div>' +
         '<div class="dates">'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>' +
         (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>' : '') +
         '<span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span>' +
-        '<span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+'</span>' +
+        (approved ? '<span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+'</span>' : '') +
         '<div class="row-actions">' +
-        (canMarkPaid ? '<button class="btn small ghost" data-markpaid="'+b.id+'">แจ้งชำระมัดจำแล้ว</button>' : '') +
+        (canPay ? '<button class="btn small primary" data-pay="'+b.id+'">ชำระเงิน '+fmtMoney(b.deposit_amount)+'</button>' : '') +
         (canAttachReceipt ? '<button class="btn small ghost" data-addreceipt="'+b.id+'">'+(b.receipt_path?'เปลี่ยนสลิป':'แนบสลิป')+'</button>' : '') +
         (canCancel ? '<button class="btn small danger" data-cancel="'+b.id+'">ยกเลิก</button>' : '') +
         '</div>' +
@@ -799,20 +769,73 @@
       btn.addEventListener('click', function(){
         apiDelete('/api/bookings/' + btn.dataset.cancel)
           .then(function(){ toast('ยกเลิกการจองแล้ว'); loadMyBookings(); loadPublicData(); })
-          .catch(function(){ toast('ยกเลิกไม่สำเร็จ', true); });
+          .catch(function(err){ toast((err && err.error) || 'ยกเลิกไม่สำเร็จ', true); });
       });
     });
-    host.querySelectorAll('[data-markpaid]').forEach(function(btn){
+    host.querySelectorAll('[data-pay]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        apiPut('/api/bookings/' + btn.dataset.markpaid + '/payment', { paymentStatus:'paid' })
-          .then(function(){ toast('แจ้งชำระเงินแล้ว — รอเจ้าหน้าที่ยืนยัน'); loadMyBookings(); })
-          .catch(function(){ toast('อัปเดตไม่สำเร็จ', true); });
+        var b = mine.find(function(x){ return String(x.id) === btn.dataset.pay; });
+        if (b) openPayModal(b);
       });
     });
     host.querySelectorAll('[data-addreceipt]').forEach(function(btn){
       btn.addEventListener('click', function(){ requestReceiptUpload(btn.dataset.addreceipt); });
     });
     wireReceiptThumbs(host);
+  }
+
+  function openPayModal(b){
+    var root = document.getElementById('modalRoot');
+    var qr = state.settings.promptPayQrUrl;
+    var payOptions = PAYMENT_METHODS.map(function(m){ return '<option value="'+m.id+'">'+esc(m.label)+'</option>'; }).join('');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>ชำระค่าเช่าล็อก '+esc(b.stall_code||'')+'</h3>' +
+      '<div class="sub">'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+' · ราคา'+esc(rateLabel(b.rate_type))+'</div>' +
+      '<div class="deposit-box">' +
+        '<div class="deposit-row"><span>ยอดที่ต้องชำระ</span><strong>'+fmtMoney(b.deposit_amount)+'</strong></div>' +
+        '<div class="field" style="margin-top:10px"><label for="payMethod">วิธีการชำระเงิน</label><select id="payMethod">'+payOptions+'</select></div>' +
+        (qr ? '<div class="qr-scan" id="payQr"><img class="receipt-thumb" style="width:150px;height:150px" src="'+esc(qr)+'" data-full="'+esc(qr)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ แตะเพื่อขยาย"><span class="muted small">สแกนด้วยแอปธนาคาร แล้วโอน '+fmtMoney(b.deposit_amount)+'</span></div>'
+            : '<p class="deposit-note" id="payQr">ยังไม่มี QR พร้อมเพย์ กรุณาสอบถามเลขบัญชีจากเจ้าหน้าที่ตลาด</p>') +
+        '<p class="deposit-note" id="payHint"></p>' +
+      '</div>' +
+      '<div class="form-error" id="payErr"></div>' +
+      '<div class="form-actions">' +
+        '<button type="button" class="btn ghost" id="payCancel">ยกเลิก</button>' +
+        '<button type="button" class="btn primary" id="payDone">โอนเงินแล้ว</button>' +
+      '</div>' +
+      '</div></div>';
+
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('payCancel').onclick = closeModal;
+    wireReceiptThumbs(root);
+    var methodSel = document.getElementById('payMethod');
+    var syncMethod = function(){
+      var m = methodSel.value;
+      document.getElementById('payQr').hidden = m !== 'promptpay';
+      document.getElementById('payHint').textContent = m === 'cash'
+        ? 'ชำระเป็นเงินสดที่สำนักงานตลาด แล้วกด "แจ้งชำระแล้ว" เจ้าหน้าที่จะยืนยันเมื่อได้รับเงิน'
+        : 'โอนเสร็จแล้วกด "โอนเงินแล้ว" จากนั้นกด "แนบสลิป" ในหน้าการจองของฉัน เพื่อให้เจ้าหน้าที่ตรวจสอบ';
+      document.getElementById('payDone').textContent = m === 'cash' ? 'แจ้งชำระแล้ว' : 'โอนเงินแล้ว';
+    };
+    methodSel.addEventListener('change', syncMethod);
+    syncMethod();
+    document.getElementById('payDone').onclick = function(){
+      var btn = this;
+      var method = methodSel.value;
+      btn.disabled = true;
+      apiPut('/api/bookings/' + b.id + '/payment', { paymentStatus: 'paid', paymentMethod: method })
+        .then(function(){
+          closeModal();
+          toast(method === 'cash' ? 'แจ้งชำระแล้ว — รอเจ้าหน้าที่ยืนยัน' : 'บันทึกการโอนแล้ว — กรุณากด "แนบสลิป"');
+          loadMyBookings();
+        })
+        .catch(function(err){
+          document.getElementById('payErr').textContent = (err && err.error) || 'บันทึกไม่สำเร็จ กรุณาลองใหม่';
+          btn.disabled = false;
+        });
+    };
   }
 
   // ---------- receipt / QR image upload ----------
@@ -961,25 +984,40 @@
   }
 
   function renderApprovals(panel){
-    var pending = (state.bookings||[]).filter(function(b){ return b.status==='pending'; });
-    if (!pending.length){
-      panel.innerHTML = '<div class="empty"><div class="big">✅</div>ไม่มีคำขอค้างอนุมัติ เรียบร้อยแล้ว</div>';
-      return;
-    }
-    var rows = pending.map(function(b){
-      var payStatus = b.payment_status || 'unpaid';
-      return '<div class="booking-row">' +
-        '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.vendor_name)+'</div><div class="stalltag">'+esc(b.vendor_phone)+'</div></div>' +
-        '<div class="dates"><span class="stalltag">'+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+'</span><br>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>' +
-        (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>' : '<span class="muted small">ไม่มีสลิป</span>') +
-        '<span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+' · '+fmtMoney(b.deposit_amount)+' (ราคา'+esc(rateLabel(b.rate_type))+')</span>' +
+    var all = state.bookings || [];
+    var pending = all.filter(function(b){ return b.status==='pending'; });
+    var awaitingPay = all.filter(function(b){ return b.status==='approved' && b.payment_status==='paid'; });
+    var methodLabel = function(id){ var m = PAYMENT_METHODS.find(function(x){ return x.id===id; }); return m ? m.label : id; };
+    var head = function(b){
+      return '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.vendor_name)+'</div><div class="stalltag">'+esc(b.vendor_phone)+'</div></div>' +
+        '<div class="dates"><span class="stalltag">'+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+'</span><br>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>';
+    };
+    var pendingRows = pending.map(function(b){
+      return '<div class="booking-row">' + head(b) +
+        '<span class="muted small">ค่าเช่า '+fmtMoney(b.deposit_amount)+' (ราคา'+esc(rateLabel(b.rate_type))+')</span>' +
         '<div class="row-actions">' +
-        (payStatus==='paid' ? '<button class="btn small ghost" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button>' : '') +
         '<button class="btn small primary" data-approve="'+b.id+'">อนุมัติ</button>' +
         '<button class="btn small danger" data-reject="'+b.id+'">ปฏิเสธ</button>' +
         '</div></div>';
     }).join('');
-    panel.innerHTML = '<div class="card" style="padding:16px"><div class="booking-list">'+rows+'</div></div>';
+    var payRows = awaitingPay.map(function(b){
+      var cash = b.payment_method === 'cash';
+      return '<div class="booking-row">' + head(b) +
+        (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>'
+          : '<span class="muted small">'+(cash ? 'ชำระเงินสด' : 'ยังไม่แนบสลิป')+'</span>') +
+        '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.deposit_amount)+'</span>' +
+        '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>' +
+        '</div>';
+    }).join('');
+    panel.innerHTML =
+      '<div class="card" style="padding:16px">' +
+        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">คำขอจองรออนุมัติ</h2><span class="muted small">'+pending.length+' รายการ</span></div>' +
+        (pendingRows ? '<div class="booking-list">'+pendingRows+'</div>' : '<div class="empty small">✅ ไม่มีคำขอค้างอนุมัติ</div>') +
+      '</div>' +
+      '<div class="card" style="padding:16px">' +
+        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">รอยืนยันรับเงิน</h2><span class="muted small">'+awaitingPay.length+' รายการ</span></div>' +
+        (payRows ? '<div class="booking-list">'+payRows+'</div>' : '<div class="empty small">✅ ไม่มีรายการรอยืนยันรับเงิน</div>') +
+      '</div>';
 
     panel.querySelectorAll('[data-approve]').forEach(function(btn){
       btn.addEventListener('click', function(){
@@ -1049,7 +1087,7 @@
         '<button type="button" class="btn ghost" id="sumClear">ล้างตัวกรอง</button>' +
       '</div>' +
       '<p class="muted small" style="margin:10px 0 0">นับเฉพาะการจองที่อนุมัติแล้ว (approved) กรองตามวันที่เริ่มจอง</p>' +
-      '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>ประเภทลูกค้า</th><th>จำนวนการจอง</th><th>ยอดมัดจำรวม</th><th>ยืนยันรับเงินแล้ว</th></tr></thead>' +
+      '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>ประเภทลูกค้า</th><th>จำนวนการจอง</th><th>ยอดค่าเช่ารวม</th><th>ยืนยันรับเงินแล้ว</th></tr></thead>' +
       '<tbody>' +
         '<tr><td>ขาจร (ราคาทั่วไป)</td><td>'+(s.guest.count||0)+'</td><td>'+fmtMoney(s.guest.total||0)+'</td><td>'+fmtMoney(s.guest.confirmedTotal||0)+' <span class="muted small">('+(s.guest.confirmedCount||0)+' รายการ)</span></td></tr>' +
         '<tr><td>ขาประจำ (ราคาสมาชิก)</td><td>'+(s.regular.count||0)+'</td><td>'+fmtMoney(s.regular.total||0)+'</td><td>'+fmtMoney(s.regular.confirmedTotal||0)+' <span class="muted small">('+(s.regular.confirmedCount||0)+' รายการ)</span></td></tr>' +
@@ -1644,7 +1682,7 @@
     var qrUrl = state.settings.promptPayQrUrl;
     panel.innerHTML = '<div class="card" style="padding:16px">' +
       '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">QR โค้ดพร้อมเพย์</h2></div>' +
-      '<p class="muted small" style="margin:0 0 12px">แสดงให้ผู้ขายเห็นตอนชำระค่ามัดจำ เฉพาะแอดมินใหญ่เท่านั้นที่แก้ไขได้</p>' +
+      '<p class="muted small" style="margin:0 0 12px">แสดงให้ผู้ขายเห็นตอนชำระค่าเช่า เฉพาะแอดมินใหญ่เท่านั้นที่แก้ไขได้</p>' +
       (qrUrl
         ? '<img class="qr-preview receipt-thumb" style="width:150px;height:150px" src="'+esc(qrUrl)+'" data-full="'+esc(qrUrl)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ปัจจุบัน แตะเพื่อขยาย">'
         : '<div class="empty small" style="padding:16px 0">ยังไม่มี QR โค้ด</div>') +
