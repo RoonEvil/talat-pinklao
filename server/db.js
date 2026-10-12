@@ -143,8 +143,10 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     prompt_pay_qr_path TEXT,
-    map_layout TEXT
+    map_layout TEXT,
+    seed_version INTEGER DEFAULT 1
   )`,
+  'ALTER TABLE settings ADD COLUMN IF NOT EXISTS seed_version INTEGER DEFAULT 1',
   `CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
     mime TEXT NOT NULL,
@@ -162,30 +164,35 @@ db.TABLES = [
   { name: 'bookings', serial: true, cols: ['id', 'stall_id', 'zone_id', 'vendor_token', 'vendor_name', 'vendor_phone', 'category', 'start_date', 'end_date', 'note', 'deposit_amount', 'rate_type', 'payment_method', 'payment_status', 'receipt_path', 'status', 'created_at', 'decided_at'] },
   { name: 'announcements', serial: true, cols: ['id', 'title', 'type', 'body', 'pinned', 'created_at'] },
   { name: 'audit_logs', serial: false, cols: ['id', 'booking_id', 'stall_id', 'stall_code', 'zone_id', 'date', 'vendor_name', 'present', 'category_match', 'fine_amount', 'fine_reason', 'recorded_at'] },
-  { name: 'settings', serial: false, cols: ['id', 'prompt_pay_qr_path', 'map_layout'] }
+  { name: 'settings', serial: false, cols: ['id', 'prompt_pay_qr_path', 'map_layout', 'seed_version'] }
 ];
+
+// The market starts with 55 stalls: F1–F28 in the food zone and G1–G27 in the general zone.
+const DEFAULT_ZONES = [
+  { name: 'โซนอาหารสดและสำเร็จรูป', description: 'อาหารปรุงสำเร็จ ของว่าง และเครื่องดื่ม ใต้เต็นท์หลัก', color: 0, order: 1, prefix: 'F', count: 28, category: () => 'food' },
+  { name: 'โซนสินค้าทั่วไป', description: 'เสื้อผ้า ของใช้ในบ้าน และสินค้าทั่วไป', color: 1, order: 2, prefix: 'G', count: 27, category: (i) => (i % 2 === 0 ? 'general' : 'clothing') }
+];
+
+async function addDefaultStalls(t, zoneId, z) {
+  for (let i = 0; i < z.count; i++) {
+    await t.run(
+      `INSERT INTO stalls (zone_id, code, size_sqm, category, price_per_day, regular_price_per_day, pos_row, pos_col, active)
+       VALUES (?,?,4,?,650,450,?,?,1) ON CONFLICT (zone_id, code) DO NOTHING`,
+      [zoneId, `${z.prefix}${i + 1}`, z.category(i), Math.floor(i / 4), i % 4]
+    );
+  }
+}
 
 async function seed() {
   const zoneCount = (await db.get('SELECT COUNT(*)::int AS c FROM zones')).c;
   if (zoneCount === 0) {
-    const zones = [
-      ['โซนอาหารสดและสำเร็จรูป', 'อาหารปรุงสำเร็จ ของว่าง และเครื่องดื่ม ใต้เต็นท์หลัก', 0, 1, 'F', 'food'],
-      ['โซนสินค้าทั่วไป', 'เสื้อผ้า ของใช้ในบ้าน และสินค้าทั่วไป', 1, 2, 'G', 'general']
-    ];
     await db.tx(async (t) => {
-      for (const z of zones) {
+      for (const z of DEFAULT_ZONES) {
         const zone = await t.get(
           'INSERT INTO zones (name, description, color_index, sort_order) VALUES (?,?,?,?) RETURNING id',
-          [z[0], z[1], z[2], z[3]]
+          [z.name, z.description, z.color, z.order]
         );
-        for (let i = 0; i < 8; i++) {
-          const cat = z[5] === 'general' ? (i % 2 === 0 ? 'general' : 'clothing') : z[5];
-          await t.run(
-            `INSERT INTO stalls (zone_id, code, size_sqm, category, price_per_day, regular_price_per_day, pos_row, pos_col, active)
-             VALUES (?,?,4,?,650,450,?,?,1)`,
-            [zone.id, `${z[4]}${i + 1}`, cat, Math.floor(i / 4), i % 4]
-          );
-        }
+        await addDefaultStalls(t, zone.id, z);
       }
     });
   }
@@ -212,10 +219,26 @@ async function seed() {
   await db.run('INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
 }
 
+// One-time upgrades for databases created by older versions. Each step runs once, so stalls an
+// admin deletes on purpose are not re-created on the next deploy.
+async function migrate() {
+  const { v } = await db.get('SELECT COALESCE(seed_version, 1) AS v FROM settings WHERE id = 1');
+  if (v < 2) {
+    await db.tx(async (t) => {
+      for (const z of DEFAULT_ZONES) {
+        const zone = await t.get('SELECT id FROM zones WHERE name = ? ORDER BY id LIMIT 1', [z.name]);
+        if (zone) await addDefaultStalls(t, zone.id, z);
+      }
+      await t.run('UPDATE settings SET seed_version = 2 WHERE id = 1');
+    });
+  }
+}
+
 db.init = async function init() {
   backend = await connect();
   for (const stmt of SCHEMA) await db.run(stmt);
   await seed();
+  await migrate();
 };
 
 module.exports = db;
