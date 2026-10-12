@@ -277,7 +277,7 @@
   // ---------- Isometric map: shared helpers ----------
   var STALL_STATUS_LABELS = { available:'ว่าง', pending:'รอการอนุมัติ', occupied:'จองแล้ว', inactive:'ปิด' };
   var STALL_STATUS_COLORS = { available:'var(--success)', pending:'var(--warning)', occupied:'var(--danger)', inactive:'var(--muted)' };
-  var MAP_KIND_LABELS = { stall:'ล็อก', entrance:'ทางเข้า / ออก', toilet:'ห้องน้ำ', tree:'ต้นไม้', stage:'เวที', parking:'ที่จอดรถ', text:'ข้อความ / ป้าย', object:'วัตถุอิสระ' };
+  var MAP_KIND_LABELS = { stall:'ล็อก', entrance:'ทางเข้า', toilet:'ห้องน้ำ', tree:'ต้นไม้', stage:'เวที', parking:'ที่จอดรถ', text:'ป้าย', object:'สิ่งของ' };
 
   function byRowCol(a, b){ return (a.pos_row||0)-(b.pos_row||0) || (a.pos_col||0)-(b.pos_col||0) || a.id-b.id; }
 
@@ -288,15 +288,19 @@
     state.zones.forEach(function(z){
       var list = stallsInZone(z.id).slice().sort(byRowCol);
       if (!list.length) return;
-      var half = Math.ceil(list.length / 2);
-      widest = Math.max(widest, half);
+      // Evenly filled rows of at most 9 stalls (at least 2 rows), separated by aisles,
+      // so a big zone stays compact and never ends with a lone stall on its own row.
+      var rowCount = list.length > 1 ? Math.max(2, Math.ceil(list.length / 9)) : 1;
+      var perRow = Math.ceil(list.length / rowCount);
+      widest = Math.max(widest, perRow);
       items.push({ kind:'text', x:0, y:y, w:2, h:1, label:z.name });
       list.forEach(function(s, i){
-        var back = i >= half;
-        items.push({ kind:'stall', stallId:s.id, x:LEFT + (back ? i - half : i), y:y + (back ? 2 : 0), w:1, h:1 });
+        items.push({ kind:'stall', stallId:s.id, x:LEFT + (i % perRow), y:y + Math.floor(i / perRow) * 2, w:1, h:1 });
       });
-      for (var c = 1; c < half; c += 2) items.push({ kind:'tree', x:LEFT + c, y:y + 1, w:1, h:1 });
-      y += 4;
+      for (var r = 0; r < rowCount - 1; r++){
+        for (var c = 1; c < perRow; c += 2) items.push({ kind:'tree', x:LEFT + c, y:y + r * 2 + 1, w:1, h:1 });
+      }
+      y += rowCount * 2;
     });
     var cols = LEFT + widest + 2;
     items.push({ kind:'text', x:cols - 3, y:0, w:3, h:1, label:'↑ ไปทาง ตึก OPD' });
@@ -1398,10 +1402,11 @@
     });
   }
 
-  var MAP_TOOLS = [
-    ['select','เลือก / ย้าย','✋'], ['stall','บูธ / ล็อก','▦'], ['entrance','ทางเข้า / ออก','🚪'],
-    ['toilet','ห้องน้ำ','🚻'], ['tree','ต้นไม้','🌳'], ['stage','เวที','🎤'], ['parking','ที่จอดรถ','🅿️'],
-    ['text','ข้อความ / ป้าย','🔤'], ['object','วัตถุอิสระ','📦'], ['erase','ยางลบ','🧽']
+  var MAP_TOOL_GROUPS = [
+    ['จัดการ', [['select','เลือก/ย้าย'], ['erase','เอาออก']]],
+    ['ล็อก', [['stall','วางล็อก']]],
+    ['จุดบริการ', [['entrance','ทางเข้า'], ['toilet','ห้องน้ำ'], ['parking','ที่จอดรถ']]],
+    ['ตกแต่งลาน', [['tree','ต้นไม้'], ['text','ป้าย'], ['stage','เวที'], ['object','สิ่งของ']]]
   ];
   var MAP_SIZES = ['1x1','1x2','2x1','2x2'];
   var editMapCtrl = null;
@@ -1448,7 +1453,7 @@
     var item = { kind:tool, x:x, y:y, w:+dims[0], h:+dims[1] };
     if (tool === 'stall'){
       var sid = state.mapPlaceStall || nextUnplacedStallId(L, null);
-      if (!sid){ toast('ไม่มีบูธที่ยังไม่ได้วาง', true); return; }
+      if (!sid){ toast('ทุกล็อกอยู่บนผังแล้ว', true); return; }
       item.stallId = +sid;
     }
     if (tool === 'text') item.label = 'ป้าย';
@@ -1490,17 +1495,20 @@
     var sel = state.mapSelected >= 0 ? L.items[state.mapSelected] : null;
     if (!sel) state.mapSelected = -1;
 
-    var toolsHtml = MAP_TOOLS.map(function(t){
-      var on = tool === t[0];
-      return '<button type="button" class="map-tool'+(on?' active':'')+'" data-tool="'+t[0]+'" aria-pressed="'+on+'"><span class="ico" aria-hidden="true">'+t[2]+'</span><span>'+t[1]+'</span></button>';
+    var toolsHtml = MAP_TOOL_GROUPS.map(function(group){
+      return '<div class="tool-group"><span class="tool-group-label">'+group[0]+'</span><div class="tool-group-btns">' +
+        group[1].map(function(t){
+          var on = tool === t[0];
+          return '<button type="button" class="map-tool'+(t[0]==='erase'?' danger':'')+(on?' active':'')+'" data-tool="'+t[0]+'" aria-pressed="'+on+'">'+IsoMap.icon(t[0])+'<span>'+t[1]+'</span></button>';
+        }).join('') + '</div></div>';
     }).join('');
 
-    var hint = { select:'คลิกเพื่อเลือก ลากเพื่อย้ายวัตถุ', stall:'คลิกช่องว่างเพื่อวางบูธที่เลือก', erase:'คลิกวัตถุเพื่อลบออกจากแผนผัง' }[tool] ||
-      ('คลิกช่องว่างเพื่อวาง' + MAP_KIND_LABELS[tool]);
+    var hint = { select:'แตะเพื่อเลือก ลากเพื่อย้าย', stall:'แตะช่องว่างบนลานเพื่อวางล็อกที่เลือกไว้', erase:'แตะสิ่งที่ต้องการเอาออกจากผัง' }[tool] ||
+      ('แตะช่องว่างบนลานเพื่อวาง' + MAP_KIND_LABELS[tool]);
 
     var chips = unplaced.length ? unplaced.map(function(s){
       return '<button type="button" class="map-chip'+(String(state.mapPlaceStall)===String(s.id)?' active':'')+'" data-placestall="'+s.id+'" data-code="'+esc(s.code.toLowerCase())+'">'+esc(s.code)+'</button>';
-    }).join('') : '<div class="muted small">บูธถูกวางครบแล้ว</div>';
+    }).join('') : '<div class="muted small">✓ ทุกล็อกอยู่บนผังแล้ว</div>';
 
     var sizeBtns = MAP_SIZES.map(function(sz){
       var on = sel ? (sel.w + 'x' + sel.h === sz) : state.mapPlaceSize === sz;
@@ -1526,15 +1534,15 @@
       '<div class="map-editor">' +
         '<div class="card isomap-card">' +
           '<div class="isomap-wrap"><div class="isomap" id="editMap"></div>' + mapZoomControls() + '</div>' +
-          '<div class="isomap-hint muted small">ลากพื้นที่ว่างเพื่อเลื่อนแผนผัง · ใช้ล้อเมาส์เพื่อซูม · '+esc(hint)+'</div>' +
+          '<div class="isomap-hint muted small">'+esc(hint)+' · ลากลานเพื่อเลื่อน · ล้อเมาส์เพื่อซูม</div>' +
         '</div>' +
         '<div class="map-side">' +
-          '<div class="card map-side-card"><div class="kicker">เลือกบูธ</div><strong>'+unplaced.length+' บูธที่ยังไม่ได้วาง</strong>' +
+          '<div class="card map-side-card"><div class="kicker">ล็อกที่ยังไม่อยู่บนผัง</div><span class="muted small">'+unplaced.length+' ล็อก — แตะรหัสแล้วแตะบนลาน</span>' +
             (unplaced.length ? '<input type="search" id="mapStallSearch" placeholder="ค้นหารหัสล็อก" aria-label="ค้นหารหัสล็อก" style="margin-top:8px">' : '') +
             '<div class="map-unplaced">'+chips+'</div></div>' +
-          '<div class="card map-side-card"><div class="kicker">ขนาด</div><div class="size-row">'+sizeBtns+'</div></div>' +
-          '<div class="card map-side-card"><div class="kicker">รายละเอียด</div>'+props+'</div>' +
-          '<div class="card map-side-card"><div class="kicker">ขนาดพื้นที่</div><div class="field-row">' +
+          '<div class="card map-side-card"><div class="kicker">พื้นที่ที่ใช้ (ช่อง)</div><div class="size-row">'+sizeBtns+'</div></div>' +
+          '<div class="card map-side-card"><div class="kicker">สิ่งที่เลือกอยู่</div>'+props+'</div>' +
+          '<div class="card map-side-card"><div class="kicker">ขนาดลานตลาด</div><div class="field-row">' +
             '<div class="field"><label for="mapCols">กว้าง (ช่อง)</label><input id="mapCols" type="number" min="4" max="60" value="'+L.cols+'"></div>' +
             '<div class="field"><label for="mapRows">ยาว (ช่อง)</label><input id="mapRows" type="number" min="4" max="60" value="'+L.rows+'"></div>' +
           '</div><button type="button" class="btn small ghost" id="mapResize">ใช้ขนาดนี้</button></div>' +
