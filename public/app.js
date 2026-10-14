@@ -105,7 +105,8 @@
     bookingsFilter: 'all',
     mapView: { s:1, tx:0, ty:0, fitted:false }, mapHighlight: null, mapInteracting: false,
     editView: { s:1, tx:0, ty:0, fitted:false }, mapDraft: null, mapDirty: false,
-    mapTool: 'select', mapSelected: -1, mapPlaceStall: null, mapPlaceSize: '1x1'
+    mapTool: 'select', mapSelected: -1, mapPlaceStall: null, mapPlaceSize: '1x1',
+    dash: null
   };
 
   function zoneById(id){ return state.zones.find(function(z){ return String(z.id)===String(id); }); }
@@ -134,6 +135,67 @@
     setTimeout(function(){ el.remove(); }, 3200);
   }
 
+  // ---------- announcements: game-style title broadcast ----------
+  // A new announcement pops up over whatever page the viewer is on (they poll every 10s), fades in, holds,
+  // then fades out. Each browser remembers the newest id it has shown, so every announcement fires once.
+  // A first-time visitor only catches one that went out within ANNOUNCE_FRESH_MS.
+  var ANNOUNCE_SEEN_KEY = 'pinklao_announce_seen';
+  var ANNOUNCE_FRESH_MS = 12 * 3600 * 1000;
+  var annQueue = [], annShowing = false, annSeen = null;
+  try {
+    var storedSeen = localStorage.getItem(ANNOUNCE_SEEN_KEY);
+    if (storedSeen != null) annSeen = Number(storedSeen) || 0;
+  } catch(e){}
+
+  function queueNewAnnouncements(list){
+    var maxId = (list || []).reduce(function(m, a){ return Math.max(m, a.id); }, 0);
+    var fresh;
+    if (annSeen == null){
+      fresh = list.filter(function(a){ return Date.now() - Date.parse(a.created_at) < ANNOUNCE_FRESH_MS; });
+      fresh = fresh.sort(function(a, b){ return a.id - b.id; }).slice(-1);
+    } else {
+      // Ids only grow, except after a restore rewinds them; then start counting from the restored data.
+      if (maxId < annSeen) annSeen = maxId;
+      fresh = list.filter(function(a){ return a.id > annSeen; }).sort(function(a, b){ return a.id - b.id; }).slice(-3);
+    }
+    if (annSeen !== maxId){
+      annSeen = maxId;
+      try { localStorage.setItem(ANNOUNCE_SEEN_KEY, String(maxId)); } catch(e){}
+    }
+    fresh.forEach(function(a){ annQueue.push(a); });
+    showNextAnnouncement();
+  }
+
+  function showNextAnnouncement(){
+    if (annShowing || !annQueue.length) return;
+    var a = annQueue.shift();
+    annShowing = true;
+    var el = document.createElement('div');
+    el.className = 'mc-title mc-' + esc(a.type || 'news');
+    el.innerHTML =
+      '<div class="mc-box" role="alert" tabindex="-1" title="แตะเพื่อปิด">' +
+        '<div class="mc-kicker">ประกาศ · ' + esc(announceTypeLabel(a.type)) + '</div>' +
+        '<div class="mc-main">' + esc(a.title) + '</div>' +
+        '<div class="mc-sub">' + esc(a.body) + '</div>' +
+      '</div>';
+    document.body.appendChild(el);
+    var hold = Math.min(12000, 4000 + (a.title.length + a.body.length) * 40);
+    var closed = false;
+    var close = function(){
+      if (closed) return;
+      closed = true;
+      el.classList.add('is-out');
+      setTimeout(function(){ el.remove(); annShowing = false; showNextAnnouncement(); }, 900);
+    };
+    el.close = close;
+    el.querySelector('.mc-box').addEventListener('click', close);
+    setTimeout(close, 500 + hold);
+  }
+  function previewAnnouncement(a){
+    annQueue.push(a);
+    showNextAnnouncement();
+  }
+
   // ---------- data loading ----------
   function loadPublicData(){
     return Promise.all([
@@ -147,6 +209,7 @@
       state.settings = res[4];
       state.loaded = true;
       render();
+      queueNewAnnouncements(state.announcements);
     }).catch(function(err){ console.error('loadPublicData', err); });
   }
 
@@ -181,14 +244,6 @@
     return apiGet('/api/audit/fines').then(function(rows){ state.auditLogs = rows; render(); })
       .catch(function(err){ handleAuthError(err); });
   }
-  function loadSummary(){
-    var params = [];
-    if (state.summaryFrom) params.push('from=' + encodeURIComponent(state.summaryFrom));
-    if (state.summaryTo) params.push('to=' + encodeURIComponent(state.summaryTo));
-    var qs = params.length ? '?' + params.join('&') : '';
-    return apiGet('/api/bookings/summary' + qs).then(function(res){ state.summary = res; render(); })
-      .catch(function(err){ handleAuthError(err); });
-  }
   function handleAuthError(err){
     if (err && err.status === 401){
       toast('เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่', true);
@@ -202,11 +257,10 @@
 
   function refreshAdminData(){
     if (!profile.isAdmin) return;
-    if (state.adminSection==='approvals' || state.adminSection==='bookings') loadAdminBookings();
+    if (['approvals','bookings','summary'].indexOf(state.adminSection) !== -1) loadAdminBookings();
     if (state.adminSection==='vendors') loadVendors();
     if (state.adminSection==='admins' && profile.isHeadAdmin) loadAdmins();
     if (state.adminSection==='audit') { loadAdminBookings(); loadAudit(state.auditDate || todayStr()); loadFines(); }
-    if (state.adminSection==='summary') loadSummary();
   }
 
   // ---------- render: shell ----------
@@ -214,7 +268,6 @@
     renderRoleArea();
     renderTabs();
     if (state.activeTab==='map') renderMap();
-    if (state.activeTab==='announce') renderAnnouncements();
     if (state.activeTab==='mine') renderMine();
     if (state.activeTab==='admin') renderAdmin();
   }
@@ -258,7 +311,6 @@
     });
     document.getElementById('adminTabBtn').hidden = !profile.isAdmin;
     document.getElementById('view-map').hidden = state.activeTab!=='map';
-    document.getElementById('view-announce').hidden = state.activeTab!=='announce';
     document.getElementById('view-mine').hidden = state.activeTab!=='mine';
     document.getElementById('view-admin').hidden = state.activeTab!=='admin';
   }
@@ -485,33 +537,6 @@
     });
   }
 
-  // ---------- Announcements (public) ----------
-  function renderAnnouncements(){
-    var host = document.getElementById('view-announce');
-    if (!state.loaded){
-      host.innerHTML = '<div class="empty"><div class="big">⏳</div>กำลังโหลดประกาศ…</div>';
-      return;
-    }
-    if (!state.announcements.length){
-      host.innerHTML = '<div class="section-head"><h2>ประกาศ</h2></div>' +
-        '<div class="empty"><div class="big">📣</div>ยังไม่มีประกาศ</div>';
-      return;
-    }
-    var rows = state.announcements.map(function(a){
-      return '<div class="announce-card">' +
-        '<div class="announce-head">' +
-          '<span class="badge '+ (a.type==='rule'?'rejected':a.type==='holiday'?'pending':a.type==='event'?'approved':'cancelled') +'">'+esc(announceTypeLabel(a.type))+'</span>' +
-          (a.pinned ? '<span class="pill on-accent small">ปักหมุด</span>' : '') +
-          '<span class="muted small" style="margin-left:auto">'+fmtDate((a.created_at||'').slice(0,10)||todayStr())+'</span>' +
-        '</div>' +
-        '<h3>'+esc(a.title)+'</h3>' +
-        '<p>'+esc(a.body)+'</p>' +
-        '</div>';
-    }).join('');
-    host.innerHTML = '<div class="section-head"><h2>ประกาศ</h2><span class="muted small">ข่าวสาร กฎระเบียบ และกำหนดการ</span></div>' +
-      '<div class="announce-list">'+rows+'</div>';
-  }
-
   // ---------- Booking modal ----------
   function openBookingModal(stallId){
     var stall = state.stalls.find(function(s){ return String(s.id)===String(stallId); });
@@ -585,7 +610,10 @@
   }
   function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
   document.addEventListener('keydown', function(e){
-    if (e.key === 'Escape' && document.getElementById('modalRoot').innerHTML){ closeModal(); }
+    if (e.key !== 'Escape') return;
+    var title = document.querySelector('.mc-title');
+    if (title) title.close();
+    else if (document.getElementById('modalRoot').innerHTML) closeModal();
   });
 
   function confirmAction(message, onConfirm, okLabel){
@@ -1075,33 +1103,305 @@
     });
   }
 
+  // ---------- revenue dashboard ----------
+  // Dates are 'YYYY-MM-DD' strings handled in UTC so a day never shifts with the viewer's timezone.
+  var TH_MONTHS_FULL = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  var DAY_NAMES = ['จ.','อ.','พ.','พฤ.','ศ.','ส.','อา.'];
+  var DAY_MS = 86400000;
+  function isoToMs(s){ return Date.UTC(+s.slice(0,4), +s.slice(5,7) - 1, +s.slice(8,10)); }
+  function msToIso(ms){ return new Date(ms).toISOString().slice(0,10); }
+  function addDaysIso(s, n){ return msToIso(isoToMs(s) + n * DAY_MS); }
+  function daysInclusive(a, b){ return Math.round((isoToMs(b) - isoToMs(a)) / DAY_MS) + 1; }
+  function mondayOf(s){ return addDaysIso(s, -((new Date(isoToMs(s)).getUTCDay() + 6) % 7)); }
+  function monthStart(y, m){ return msToIso(Date.UTC(y, m, 1)); }
+  function monthEnd(y, m){ return msToIso(Date.UTC(y, m + 1, 0)); }
+  function shortDate(s){ var d = new Date(isoToMs(s)); return d.getUTCDate() + ' ' + TH_MONTHS[d.getUTCMonth()]; }
+  function rangeLabel(a, b){
+    var da = new Date(isoToMs(a)), db = new Date(isoToMs(b));
+    if (a === b) return shortDate(a);
+    if (da.getUTCMonth() === db.getUTCMonth()) return da.getUTCDate() + '–' + db.getUTCDate() + ' ' + TH_MONTHS[db.getUTCMonth()];
+    return shortDate(a) + ' – ' + shortDate(b);
+  }
+  function money0(n){ return fmtMoney(Math.round(n)); }
+
+  // Each approved booking is spread over its days at (total ÷ days) per day, so a booking that crosses
+  // a week or month boundary counts in each period only for the days it covers there.
+  function revenueBetween(from, to){
+    var t = { from:from, to:to, days:daysInclusive(from, to), amount:0, confirmed:0, stallDays:0, bookings:0,
+      guest:{ amount:0, confirmed:0, bookings:0 }, regular:{ amount:0, confirmed:0, bookings:0 }, zones:[], stalls:[] };
+    var zones = {}, stalls = {};
+    (state.bookings || []).forEach(function(b){
+      if (b.status !== 'approved') return;
+      var s = b.start_date > from ? b.start_date : from;
+      var e = b.end_date < to ? b.end_date : to;
+      if (s > e) return;
+      var days = daysInclusive(s, e);
+      var amount = (Number(b.deposit_amount) || 0) / daysInclusive(b.start_date, b.end_date) * days;
+      var paid = b.payment_status === 'confirmed' ? amount : 0;
+      var g = b.rate_type === 'regular' ? t.regular : t.guest;
+      t.amount += amount; t.confirmed += paid; t.stallDays += days; t.bookings++;
+      g.amount += amount; g.confirmed += paid; g.bookings++;
+      var z = zones[b.zone_id] || (zones[b.zone_id] = { name: b.zone_name || '—', amount:0, stallDays:0 });
+      z.amount += amount; z.stallDays += days;
+      var st = stalls[b.stall_id] || (stalls[b.stall_id] = { code: b.stall_code || '—', amount:0, stallDays:0 });
+      st.amount += amount; st.stallDays += days;
+    });
+    var byAmount = function(a, b){ return b.amount - a.amount || b.stallDays - a.stallDays; };
+    t.zones = Object.keys(zones).map(function(k){ return zones[k]; }).sort(byAmount);
+    t.stalls = Object.keys(stalls).map(function(k){ return stalls[k]; }).sort(byAmount).slice(0, 5);
+    return t;
+  }
+
+  function dashState(){
+    if (!state.dash){
+      var t = todayStr();
+      state.dash = { mode:'month', year:+t.slice(0,4), month:+t.slice(5,7) - 1, week:mondayOf(t) };
+    }
+    return state.dash;
+  }
+
+  // The selected period, the 12 periods charted around it, and the rows the report breaks it into.
+  function dashPeriods(d){
+    var p = {};
+    if (d.mode === 'month'){
+      p.from = monthStart(d.year, d.month); p.to = monthEnd(d.year, d.month);
+      p.title = 'รายงานประจำเดือน' + TH_MONTHS_FULL[d.month] + ' ' + d.year;
+      p.navLabel = TH_MONTHS_FULL[d.month] + ' ' + d.year;
+      p.prev = { from: monthStart(d.year, d.month - 1), to: monthEnd(d.year, d.month - 1) };
+      p.compareLabel = 'เดือนก่อน';
+      p.trendTitle = 'ยอดค่าเช่ารายเดือน ปี ' + d.year;
+      p.trend = TH_MONTHS.map(function(name, m){
+        return { key:String(m), label:name, longLabel:TH_MONTHS_FULL[m] + ' ' + d.year, from:monthStart(d.year, m), to:monthEnd(d.year, m) };
+      });
+      p.selectedKey = String(d.month);
+      p.rowsHead = 'สัปดาห์';
+      p.rows = [];
+      for (var w = mondayOf(p.from); w <= p.to; w = addDaysIso(w, 7)){
+        var a = w < p.from ? p.from : w, b = addDaysIso(w, 6) > p.to ? p.to : addDaysIso(w, 6);
+        p.rows.push({ label: rangeLabel(a, b), from:a, to:b });
+      }
+    } else {
+      p.from = d.week; p.to = addDaysIso(d.week, 6);
+      p.title = 'สรุปประจำสัปดาห์ ' + rangeLabel(p.from, p.to) + ' ' + p.to.slice(0,4);
+      p.navLabel = rangeLabel(p.from, p.to) + ' ' + p.to.slice(0,4);
+      p.prev = { from: addDaysIso(p.from, -7), to: addDaysIso(p.to, -7) };
+      p.compareLabel = 'สัปดาห์ก่อน';
+      p.trendTitle = 'ยอดค่าเช่ารายสัปดาห์ (12 สัปดาห์ล่าสุดถึงสัปดาห์ที่เลือก)';
+      p.trend = [];
+      for (var i = 11; i >= 0; i--){
+        var ws = addDaysIso(d.week, -7 * i), we = addDaysIso(ws, 6);
+        p.trend.push({ key:ws, label:shortDate(ws), longLabel:'สัปดาห์ ' + rangeLabel(ws, we), from:ws, to:we });
+      }
+      p.selectedKey = d.week;
+      p.rowsHead = 'วัน';
+      p.rows = DAY_NAMES.map(function(name, k){
+        var day = addDaysIso(p.from, k);
+        return { label: name + ' ' + shortDate(day), from:day, to:day };
+      });
+    }
+    return p;
+  }
+
+  // Y-axis scale: a round tick step (1, 2, 2.5 or 5 × 10ⁿ) giving about four gridlines above zero.
+  function niceScale(v){
+    if (v <= 0) return { step:250, top:1000 };
+    var raw = v / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var step = [1, 2, 2.5, 5, 10].map(function(s){ return s * mag; }).filter(function(s){ return s >= raw; })[0];
+    return { step:step, top:Math.ceil(v / step) * step };
+  }
+  function shortMoney(n){
+    if (n >= 1000000) return '฿' + (n / 1000000).toFixed(n % 1000000 ? 1 : 0) + 'M';
+    if (n >= 1000) return '฿' + (n / 1000).toFixed(n % 1000 ? 1 : 0) + 'k';
+    return '฿' + n;
+  }
+  // Rectangle with only the top corners rounded, so stacks stay flush on the baseline.
+  function topRoundedRect(x, y, w, h, r){
+    r = Math.min(r, w / 2, h);
+    return 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y +
+      'H' + (x + w - r) + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (y + h) + 'Z';
+  }
+
+  // Stacked bars (ขาจร at the base, ขาประจำ on top) with one y-axis in baht.
+  function revenueChartSvg(buckets, selectedKey, width){
+    var H = 230, padL = 52, padR = 8, padT = 22, padB = 26;
+    var plotW = Math.max(120, width - padL - padR), plotH = H - padT - padB;
+    var scale = niceScale(buckets.reduce(function(m, b){ return Math.max(m, b.data.amount); }, 0));
+    var max = scale.top;
+    var y = function(v){ return padT + plotH - v / max * plotH; };
+    var colW = plotW / buckets.length;
+    var barW = Math.max(6, Math.min(36, colW * 0.56));
+    var labelEvery = colW < 44 ? 2 : 1;
+    var out = ['<svg class="dash-chart-svg" width="' + width + '" height="' + H + '" viewBox="0 0 ' + width + ' ' + H + '" role="img" aria-label="กราฟยอดค่าเช่า แยกขาจรและขาประจำ">'];
+    for (var v = 0; v <= max + 1e-9; v += scale.step){
+      var gy = y(v).toFixed(1);
+      out.push('<line class="dash-grid' + (v === 0 ? ' is-base' : '') + '" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + gy + '" y2="' + gy + '"/>');
+      out.push('<text class="dash-axis" x="' + (padL - 8) + '" y="' + gy + '" text-anchor="end" dominant-baseline="middle">' + shortMoney(v) + '</text>');
+    }
+    buckets.forEach(function(b, i){
+      var cx = padL + colW * i + colW / 2, x = cx - barW / 2;
+      var selected = b.key === selectedKey;
+      if (selected) out.push('<rect class="dash-sel" x="' + (padL + colW * i + 1) + '" y="' + padT + '" width="' + (colW - 2) + '" height="' + plotH + '" rx="6"/>');
+      var gH = b.data.guest.amount / max * plotH, rH = b.data.regular.amount / max * plotH;
+      var base = padT + plotH;
+      var gap = gH > 0 && rH > 0 ? 2 : 0;
+      if (gH > 0) out.push('<path class="dash-bar dash-guest" d="' + (rH > 0 ? 'M' + x + ',' + base + 'V' + (base - gH) + 'H' + (x + barW) + 'V' + base + 'Z' : topRoundedRect(x, base - gH, barW, gH, 4)) + '"/>');
+      if (rH > 0) out.push('<path class="dash-bar dash-regular" d="' + topRoundedRect(x, base - gH - gap - rH, barW, rH, 4) + '"/>');
+      if (selected && b.data.amount > 0) out.push('<text class="dash-value" x="' + cx + '" y="' + (base - gH - gap - rH - 6) + '" text-anchor="middle">' + money0(b.data.amount) + '</text>');
+      if (i % labelEvery === 0 || selected) out.push('<text class="dash-axis' + (selected ? ' is-sel' : '') + '" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(b.label) + '</text>');
+      out.push('<rect class="dash-hit" data-key="' + esc(b.key) + '" data-idx="' + i + '" x="' + (padL + colW * i) + '" y="' + padT + '" width="' + colW + '" height="' + (plotH + padB) + '" tabindex="0" role="button" aria-label="' + esc(b.longLabel + ' ยอด ' + money0(b.data.amount)) + '"/>');
+    });
+    out.push('</svg>');
+    return out.join('');
+  }
+
+  function kpiTile(label, value, sub){
+    return '<div class="kpi"><div class="kpi-label">' + label + '</div><div class="kpi-value mono">' + value + '</div>' + (sub ? '<div class="kpi-sub">' + sub + '</div>' : '') + '</div>';
+  }
+  function pctChange(now, before){
+    if (!before) return now ? 'ใหม่ — ไม่มียอดในช่วงก่อนหน้า' : '';
+    var p = Math.round((now - before) / before * 100);
+    return (p > 0 ? '▲ ' : p < 0 ? '▼ ' : '') + Math.abs(p) + '%';
+  }
+
   function renderSummaryAdmin(panel){
-    var from = state.summaryFrom || '';
-    var to = state.summaryTo || '';
-    var s = state.summary || { guest:{count:0,total:0,confirmedCount:0,confirmedTotal:0}, regular:{count:0,total:0,confirmedCount:0,confirmedTotal:0} };
-    var totalCount = (s.guest.count||0) + (s.regular.count||0);
-    var totalAmount = (s.guest.total||0) + (s.regular.total||0);
-    var totalConfirmedCount = (s.guest.confirmedCount||0) + (s.regular.confirmedCount||0);
-    var totalConfirmedAmount = (s.guest.confirmedTotal||0) + (s.regular.confirmedTotal||0);
+    var d = dashState();
+    var p = dashPeriods(d);
+    var cur = revenueBetween(p.from, p.to);
+    var prev = revenueBetween(p.prev.from, p.prev.to);
+    var activeStalls = state.stalls.filter(function(s){ return s.active; }).length;
+    var occupancy = activeStalls ? Math.round(cur.stallDays / (activeStalls * cur.days) * 1000) / 10 : 0;
+    p.trend.forEach(function(b){ b.data = revenueBetween(b.from, b.to); });
+    var rows = p.rows.map(function(r){ r.data = revenueBetween(r.from, r.to); return r; });
+    var change = pctChange(cur.amount, prev.amount);
 
-    panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="add-row">' +
-        '<div class="field"><label for="sumFrom">ตั้งแต่วันที่ (เริ่มจอง)</label><input type="date" id="sumFrom" value="'+esc(from)+'"></div>' +
-        '<div class="field"><label for="sumTo">ถึงวันที่</label><input type="date" id="sumTo" value="'+esc(to)+'"></div>' +
-        '<button type="button" class="btn ghost" id="sumClear">ล้างตัวกรอง</button>' +
+    var rowHtml = rows.map(function(r){
+      var x = r.data;
+      return '<tr><td>' + esc(r.label) + '</td><td class="mono">' + money0(x.guest.amount) + '</td><td class="mono">' + money0(x.regular.amount) + '</td>' +
+        '<td class="mono"><strong>' + money0(x.amount) + '</strong></td><td class="mono">' + money0(x.confirmed) + '</td><td class="mono">' + x.stallDays + '</td></tr>';
+    }).join('');
+    var zoneRows = cur.zones.map(function(z){
+      return '<tr><td>' + esc(z.name) + '</td><td class="mono">' + z.stallDays + '</td><td class="mono">' + money0(z.amount) + '</td></tr>';
+    }).join('');
+    var stallRows = cur.stalls.map(function(s, i){
+      return '<tr><td class="mono">' + (i + 1) + '. ' + esc(s.code) + '</td><td class="mono">' + s.stallDays + '</td><td class="mono">' + money0(s.amount) + '</td></tr>';
+    }).join('');
+    var none = '<tr><td colspan="3" class="empty small">ไม่มีการจองที่อนุมัติในช่วงนี้</td></tr>';
+
+    panel.innerHTML =
+      '<div class="card dash-controls no-print">' +
+        '<div class="seg" role="group" aria-label="รูปแบบรายงาน">' +
+          '<button type="button" class="seg-btn' + (d.mode === 'month' ? ' active' : '') + '" data-dashmode="month" aria-pressed="' + (d.mode === 'month') + '">รายเดือน</button>' +
+          '<button type="button" class="seg-btn' + (d.mode === 'week' ? ' active' : '') + '" data-dashmode="week" aria-pressed="' + (d.mode === 'week') + '">รายสัปดาห์</button>' +
+        '</div>' +
+        '<div class="dash-nav">' +
+          '<button type="button" class="btn small ghost" data-dashstep="-1" aria-label="ช่วงก่อนหน้า">‹</button>' +
+          '<strong>' + esc(p.navLabel) + '</strong>' +
+          '<button type="button" class="btn small ghost" data-dashstep="1" aria-label="ช่วงถัดไป">›</button>' +
+          '<button type="button" class="btn small ghost" id="dashToday">ปัจจุบัน</button>' +
+        '</div>' +
+        '<div class="dash-actions">' +
+          '<button type="button" class="btn small ghost" id="dashCsv">ดาวน์โหลด CSV</button>' +
+          '<button type="button" class="btn small primary" id="dashPrint">พิมพ์รายงาน</button>' +
+        '</div>' +
       '</div>' +
-      '<p class="muted small" style="margin:10px 0 0">นับเฉพาะการจองที่อนุมัติแล้ว (approved) กรองตามวันที่เริ่มจอง</p>' +
-      '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>ประเภทลูกค้า</th><th>จำนวนการจอง</th><th>ยอดค่าเช่ารวม</th><th>ยืนยันรับเงินแล้ว</th></tr></thead>' +
-      '<tbody>' +
-        '<tr><td>ขาจร (ราคาทั่วไป)</td><td>'+(s.guest.count||0)+'</td><td>'+fmtMoney(s.guest.total||0)+'</td><td>'+fmtMoney(s.guest.confirmedTotal||0)+' <span class="muted small">('+(s.guest.confirmedCount||0)+' รายการ)</span></td></tr>' +
-        '<tr><td>ขาประจำ (ราคาสมาชิก)</td><td>'+(s.regular.count||0)+'</td><td>'+fmtMoney(s.regular.total||0)+'</td><td>'+fmtMoney(s.regular.confirmedTotal||0)+' <span class="muted small">('+(s.regular.confirmedCount||0)+' รายการ)</span></td></tr>' +
-        '<tr style="font-weight:600"><td>รวมทั้งหมด</td><td>'+totalCount+'</td><td>'+fmtMoney(totalAmount)+'</td><td>'+fmtMoney(totalConfirmedAmount)+' <span class="muted small">('+totalConfirmedCount+' รายการ)</span></td></tr>' +
-      '</tbody></table></div>' +
-    '</div>';
+      '<div class="dash-report">' +
+        '<div class="section-head" style="margin-bottom:0"><h2>' + esc(p.title) + '</h2><span class="muted small">' + fmtDate(p.from) + ' – ' + fmtDate(p.to) + '</span></div>' +
+        '<div class="kpi-row">' +
+          kpiTile('ยอดค่าเช่า (อนุมัติแล้ว)', money0(cur.amount), change ? esc(change) + ' เทียบ' + p.compareLabel : '') +
+          kpiTile('รับเงินแล้ว', money0(cur.confirmed), cur.amount ? 'คิดเป็น ' + Math.round(cur.confirmed / cur.amount * 100) + '% ของยอด' : '') +
+          kpiTile('จำนวนการจอง', String(cur.bookings), 'ขาจร ' + cur.guest.bookings + ' · ขาประจำ ' + cur.regular.bookings) +
+          kpiTile('อัตราการใช้ล็อก', occupancy + '%', cur.stallDays + ' ล็อก-วัน จาก ' + activeStalls + ' ล็อก × ' + cur.days + ' วัน') +
+        '</div>' +
+        '<div class="card dash-chart-card">' +
+          '<div class="dash-chart-head"><span class="kicker" style="margin:0">' + esc(p.trendTitle) + '</span>' +
+            '<span class="dash-legend"><span><i class="dash-key dash-guest"></i>ขาจร</span><span><i class="dash-key dash-regular"></i>ขาประจำ</span></span></div>' +
+          '<div class="dash-chart" id="dashChart"></div>' +
+          '<div class="muted small no-print">แตะแท่งกราฟเพื่อดูรายงานของช่วงนั้น</div>' +
+        '</div>' +
+        '<div class="card" style="padding:16px">' +
+          '<div class="kicker">แยกตาม' + p.rowsHead + '</div>' +
+          '<div class="table-wrap"><table><thead><tr><th>' + p.rowsHead + '</th><th>ขาจร</th><th>ขาประจำ</th><th>รวม</th><th>รับเงินแล้ว</th><th>ล็อก-วัน</th></tr></thead>' +
+          '<tbody>' + rowHtml +
+            '<tr class="total-row"><td>รวมทั้งหมด</td><td class="mono">' + money0(cur.guest.amount) + '</td><td class="mono">' + money0(cur.regular.amount) + '</td>' +
+            '<td class="mono">' + money0(cur.amount) + '</td><td class="mono">' + money0(cur.confirmed) + '</td><td class="mono">' + cur.stallDays + '</td></tr>' +
+          '</tbody></table></div>' +
+        '</div>' +
+        '<div class="dash-split">' +
+          '<div class="card" style="padding:16px"><div class="kicker">แยกตามโซน</div><div class="table-wrap"><table><thead><tr><th>โซน</th><th>ล็อก-วัน</th><th>ยอด</th></tr></thead><tbody>' + (zoneRows || none) + '</tbody></table></div></div>' +
+          '<div class="card" style="padding:16px"><div class="kicker">ล็อกยอดนิยม</div><div class="table-wrap"><table><thead><tr><th>ล็อก</th><th>ล็อก-วัน</th><th>ยอด</th></tr></thead><tbody>' + (stallRows || none) + '</tbody></table></div></div>' +
+        '</div>' +
+        '<p class="muted small">นับเฉพาะการจองที่อนุมัติแล้ว ยอดของการจองหลายวันจะเฉลี่ยลงแต่ละวันที่จองจริง ส่วน "รับเงินแล้ว" คือรายการที่เจ้าหน้าที่ยืนยันรับเงิน</p>' +
+      '</div>';
 
-    document.getElementById('sumFrom').addEventListener('change', function(){ state.summaryFrom = this.value; loadSummary(); });
-    document.getElementById('sumTo').addEventListener('change', function(){ state.summaryTo = this.value; loadSummary(); });
-    document.getElementById('sumClear').addEventListener('click', function(){ state.summaryFrom = ''; state.summaryTo = ''; loadSummary(); });
+    var chartHost = document.getElementById('dashChart');
+    chartHost.innerHTML = revenueChartSvg(p.trend, p.selectedKey, Math.max(280, chartHost.clientWidth || 640));
+    var tip = document.createElement('div');
+    tip.className = 'dash-tip';
+    tip.hidden = true;
+    chartHost.appendChild(tip);
+    var selectBucket = function(key){
+      if (d.mode === 'month') d.month = +key; else d.week = key;
+      render();
+    };
+    chartHost.querySelectorAll('.dash-hit').forEach(function(hit){
+      var b = p.trend[+hit.dataset.idx];
+      var show = function(){
+        tip.innerHTML = '<strong>' + esc(b.longLabel) + '</strong>' +
+          '<div><i class="dash-key dash-guest"></i>ขาจร <span class="mono">' + money0(b.data.guest.amount) + '</span></div>' +
+          '<div><i class="dash-key dash-regular"></i>ขาประจำ <span class="mono">' + money0(b.data.regular.amount) + '</span></div>' +
+          '<div class="dash-tip-total">รวม <span class="mono">' + money0(b.data.amount) + '</span> · ' + b.data.bookings + ' การจอง</div>';
+        tip.hidden = false;
+        var hostBox = chartHost.getBoundingClientRect(), box = hit.getBoundingClientRect();
+        var left = box.left - hostBox.left + box.width / 2 - tip.offsetWidth / 2;
+        tip.style.left = Math.max(0, Math.min(hostBox.width - tip.offsetWidth, left)) + 'px';
+      };
+      hit.addEventListener('mouseenter', show);
+      hit.addEventListener('focus', show);
+      hit.addEventListener('mouseleave', function(){ tip.hidden = true; });
+      hit.addEventListener('blur', function(){ tip.hidden = true; });
+      hit.addEventListener('click', function(){ selectBucket(hit.dataset.key); });
+      hit.addEventListener('keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); selectBucket(hit.dataset.key); }
+      });
+    });
+
+    panel.querySelectorAll('[data-dashmode]').forEach(function(btn){
+      btn.addEventListener('click', function(){ d.mode = btn.dataset.dashmode; render(); });
+    });
+    panel.querySelectorAll('[data-dashstep]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var step = +btn.dataset.dashstep;
+        if (d.mode === 'month'){
+          var m = d.month + step;
+          d.year += Math.floor(m / 12);
+          d.month = ((m % 12) + 12) % 12;
+        } else {
+          d.week = addDaysIso(d.week, 7 * step);
+        }
+        render();
+      });
+    });
+    document.getElementById('dashToday').onclick = function(){ state.dash = null; dashState().mode = d.mode; render(); };
+    document.getElementById('dashPrint').onclick = function(){ window.print(); };
+    document.getElementById('dashCsv').onclick = function(){
+      var lines = [[p.title], [], [p.rowsHead, 'ขาจร (บาท)', 'ขาประจำ (บาท)', 'รวม (บาท)', 'รับเงินแล้ว (บาท)', 'ล็อก-วัน']];
+      rows.forEach(function(r){
+        lines.push([r.label, Math.round(r.data.guest.amount), Math.round(r.data.regular.amount), Math.round(r.data.amount), Math.round(r.data.confirmed), r.data.stallDays]);
+      });
+      lines.push(['รวมทั้งหมด', Math.round(cur.guest.amount), Math.round(cur.regular.amount), Math.round(cur.amount), Math.round(cur.confirmed), cur.stallDays]);
+      lines.push([]);
+      lines.push(['จำนวนการจอง', cur.bookings, 'ขาจร', cur.guest.bookings, 'ขาประจำ', cur.regular.bookings]);
+      lines.push(['อัตราการใช้ล็อก (%)', occupancy]);
+      var csv = lines.map(function(l){ return l.map(function(v){ return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n');
+      // The BOM makes Excel open the Thai text as UTF-8.
+      var blob = new Blob(['﻿' + csv], { type:'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'talat-pinklao-' + (d.mode === 'month' ? 'month-' + p.from.slice(0,7) : 'week-' + p.from) + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    };
   }
 
   function renderZoneAdmin(panel){
@@ -1289,23 +1589,34 @@
     var rows = state.announcements.map(function(a){
       var cls = a.type==='rule' ? 'rejected' : a.type==='holiday' ? 'pending' : a.type==='event' ? 'approved' : 'cancelled';
       return '<tr><td><span class="badge '+cls+'">'+esc(announceTypeLabel(a.type))+'</span></td>' +
-        '<td>'+esc(a.title)+(a.pinned?' <span class="pill on-accent small">ปักหมุด</span>':'')+'<br><span class="muted small">'+esc(a.body)+'</span></td>' +
+        '<td>'+esc(a.title)+'<br><span class="muted small">'+esc(a.body)+'</span></td>' +
         '<td>'+fmtDate((a.created_at||todayStr()).slice(0,10))+'</td>' +
-        '<td><button type="button" class="btn small ghost" data-pin="'+a.id+'">'+(a.pinned?'ยกเลิกปักหมุด':'ปักหมุด')+'</button> ' +
+        '<td><button type="button" class="btn small ghost" data-previewannounce="'+a.id+'">ดูตัวอย่าง</button> ' +
         '<button type="button" class="btn small danger" data-delannounce="'+a.id+'">ลบ</button></td></tr>';
     }).join('');
 
     panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<div class="add-row" style="flex-direction:column; align-items:stretch">' +
+        '<p class="muted small" style="margin:0">ประกาศจะเด้งขึ้นกลางจอของทุกคนที่เปิดเว็บอยู่ภายในประมาณ 10 วินาที แสดงครั้งเดียวต่อเครื่อง ' +
+          'คนที่เข้าเว็บภายหลังจะเห็นประกาศล่าสุดถ้ายิงไปไม่เกิน 12 ชั่วโมง</p>' +
+        '<div class="field-row">' +
+          '<div class="field"><label for="anTitle">หัวข้อ (ตัวใหญ่กลางจอ)</label><input id="anTitle" maxlength="60" placeholder="ตลาดปิดช่วงสงกรานต์"></div>' +
+          '<div class="field"><label for="anType">ประเภท (สีของประกาศ)</label><select id="anType">'+typeOptions+'</select></div>' +
+        '</div>' +
+        '<div class="field"><label for="anBody">ข้อความใต้หัวข้อ</label><textarea id="anBody" rows="2" maxlength="200" placeholder="รายละเอียดสำหรับผู้ขาย"></textarea></div>' +
+        '<div class="row-actions"><button type="button" class="btn ghost" id="anPreview">ดูตัวอย่าง</button><button type="button" class="btn primary" id="anAdd">ยิงประกาศ</button></div>' +
+      '</div>' +
+      '<div class="section-head" style="margin:18px 0 8px"><h2 style="font-size:1rem">ประกาศที่ยิงไปแล้ว</h2></div>' +
       '<div class="table-wrap"><table><thead><tr><th>ประเภท</th><th>ประกาศ</th><th>วันที่</th><th></th></tr></thead>' +
       '<tbody>'+(rows||'<tr><td colspan="4" class="empty">ยังไม่มีประกาศ</td></tr>')+'</tbody></table></div>' +
-      '<div class="add-row" style="margin-top:14px; flex-direction:column; align-items:stretch">' +
-        '<div class="field-row">' +
-          '<div class="field"><label for="anTitle">หัวข้อ</label><input id="anTitle" placeholder="ตลาดปิดช่วงสงกรานต์"></div>' +
-          '<div class="field"><label for="anType">ประเภท</label><select id="anType">'+typeOptions+'</select></div>' +
-        '</div>' +
-        '<div class="field"><label for="anBody">ข้อความ</label><textarea id="anBody" rows="2" placeholder="รายละเอียดสำหรับผู้ขาย"></textarea></div>' +
-        '<div><button type="button" class="btn primary" id="anAdd">โพสต์ประกาศ</button></div>' +
-      '</div></div>';
+      '</div>';
+
+    document.getElementById('anPreview').onclick = function(){
+      var title = document.getElementById('anTitle').value.trim();
+      var body = document.getElementById('anBody').value.trim();
+      if (!title || !body){ toast('กรอกหัวข้อและข้อความก่อนดูตัวอย่าง', true); return; }
+      previewAnnouncement({ title:title, body:body, type:document.getElementById('anType').value });
+    };
 
     var anAddBtn = document.getElementById('anAdd');
     anAddBtn.onclick = function(){
@@ -1316,19 +1627,18 @@
       anAddBtn.disabled = true;
       apiPost('/api/announcements', { title:title, type:type, body:body })
         .then(function(){
-          toast('โพสต์ประกาศแล้ว');
+          toast('ยิงประกาศแล้ว');
           document.getElementById('anTitle').value='';
           document.getElementById('anBody').value='';
           loadPublicData();
         })
-        .catch(function(err){ toast(err.error || 'โพสต์ประกาศไม่สำเร็จ', true); })
+        .catch(function(err){ toast(err.error || 'ยิงประกาศไม่สำเร็จ', true); })
         .then(function(){ anAddBtn.disabled = false; });
     };
-    panel.querySelectorAll('[data-pin]').forEach(function(btn){
+    panel.querySelectorAll('[data-previewannounce]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        var a = state.announcements.find(function(x){ return String(x.id)===btn.dataset.pin; });
-        apiPut('/api/announcements/' + btn.dataset.pin, { pinned: !a.pinned })
-          .then(function(){ toast(a.pinned ? 'ยกเลิกปักหมุดแล้ว' : 'ปักหมุดแล้ว'); loadPublicData(); });
+        var a = state.announcements.find(function(x){ return String(x.id)===btn.dataset.previewannounce; });
+        if (a) previewAnnouncement(a);
       });
     });
     panel.querySelectorAll('[data-delannounce]').forEach(function(btn){
@@ -1888,6 +2198,12 @@
   }
 
   // ---------- boot ----------
+  var resizeTimer = null;
+  window.addEventListener('resize', function(){
+    if (state.activeTab !== 'admin' || state.adminSection !== 'summary') return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 200);
+  });
   render();
   loadPublicData();
   loadMyBookings();
