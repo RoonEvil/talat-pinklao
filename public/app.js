@@ -502,18 +502,16 @@
     }).join('');
 
     var oldNews = host.querySelector('.news-list');
-    var newsScroll = oldNews ? oldNews.scrollTop : 0;
+    var newsScroll = oldNews ? oldNews.scrollLeft : 0;
     host.innerHTML =
+      newsBoardHtml() +
       '<div class="section-head"><h2>ผังตลาด</h2><span class="muted small">แตะที่ล็อกบนแผนผังเพื่อขอจอง</span></div>' +
-      '<div class="map-layout">' +
-        '<div class="card isomap-card">' +
-          '<div class="isomap-toolbar">' + zoneButtons +
-            '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
-          '</div>' +
-          '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
-          '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
+      '<div class="card isomap-card">' +
+        '<div class="isomap-toolbar">' + zoneButtons +
+          '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
         '</div>' +
-        newsBoardHtml() +
+        '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
+        '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
       '</div>' +
       legend +
       '<div class="section-head"><h2 style="font-size:1rem">รายการล็อกแยกตามโซน</h2></div>' +
@@ -523,7 +521,7 @@
       btn.addEventListener('click', function(){ openBookingModal(btn.dataset.stall); });
     });
     var newsList = host.querySelector('.news-list');
-    if (newsList) newsList.scrollTop = newsScroll;
+    if (newsList) newsList.scrollLeft = newsScroll;
     host.querySelectorAll('[data-news]').forEach(function(btn){
       btn.addEventListener('click', function(){
         var a = state.announcements.find(function(x){ return String(x.id) === btn.dataset.news; });
@@ -533,7 +531,7 @@
     mountPublicMap(host);
   }
 
-  // News board beside the market map, so an announcement can still be read after its pop-up has gone.
+  // News strip at the top of the market page, so an announcement can still be read after its pop-up has gone.
   var NEWS_NEW_MS = 3 * 24 * 3600 * 1000;
   var NEWS_BADGE = { rule:'rejected', holiday:'pending', event:'approved', news:'cancelled' };
   function newsBoardHtml(){
