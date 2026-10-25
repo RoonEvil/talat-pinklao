@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 const wrap = require('../wrap');
 const { JWT_SECRET } = require('../middleware/auth');
+const { CATEGORY_IDS, FOOD_TYPE_IDS, splitList } = require('../goods');
 
 const router = express.Router();
 
@@ -11,18 +12,10 @@ function sanitizeUsername(u) {
   return String(u || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
 }
 
-// What a vendor may register as selling. Keep in sync with CATEGORIES / FOOD_TYPES in public/app.js.
-const CATEGORY_IDS = ['food', 'clothing', 'general', 'service', 'other'];
-const FOOD_TYPE_IDS = ['ready_meal', 'made_to_order', 'grill_fried', 'dessert', 'bakery', 'drink', 'fruit', 'fresh'];
-
 // Known ids only, without duplicates, in a fixed order.
 function pickKnown(value, allowed) {
   const list = Array.isArray(value) ? value : [];
   return allowed.filter((id) => list.includes(id));
-}
-
-function splitList(s) {
-  return s ? String(s).split(',').filter(Boolean) : [];
 }
 
 function vendorUser(v) {
