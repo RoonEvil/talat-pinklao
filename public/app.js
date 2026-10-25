@@ -1107,12 +1107,14 @@
   // Dates are 'YYYY-MM-DD' strings handled in UTC so a day never shifts with the viewer's timezone.
   var TH_MONTHS_FULL = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
   var DAY_NAMES = ['จ.','อ.','พ.','พฤ.','ศ.','ส.','อา.'];
+  var DAY_NAMES_FULL = ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์'];
   var DAY_MS = 86400000;
   function isoToMs(s){ return Date.UTC(+s.slice(0,4), +s.slice(5,7) - 1, +s.slice(8,10)); }
   function msToIso(ms){ return new Date(ms).toISOString().slice(0,10); }
   function addDaysIso(s, n){ return msToIso(isoToMs(s) + n * DAY_MS); }
   function daysInclusive(a, b){ return Math.round((isoToMs(b) - isoToMs(a)) / DAY_MS) + 1; }
-  function mondayOf(s){ return addDaysIso(s, -((new Date(isoToMs(s)).getUTCDay() + 6) % 7)); }
+  function weekdayIdx(s){ return (new Date(isoToMs(s)).getUTCDay() + 6) % 7; } // 0 = Monday
+  function mondayOf(s){ return addDaysIso(s, -weekdayIdx(s)); }
   function monthStart(y, m){ return msToIso(Date.UTC(y, m, 1)); }
   function monthEnd(y, m){ return msToIso(Date.UTC(y, m + 1, 0)); }
   function shortDate(s){ var d = new Date(isoToMs(s)); return d.getUTCDate() + ' ' + TH_MONTHS[d.getUTCMonth()]; }
@@ -1152,10 +1154,23 @@
     return t;
   }
 
+  // Approved bookings that cover one day, with that day's share of each booking's total.
+  function bookingsOnDay(day){
+    return (state.bookings || []).filter(function(b){
+      return b.status === 'approved' && b.start_date <= day && b.end_date >= day;
+    }).map(function(b){
+      return {
+        code: b.stall_code || '—', vendor: b.vendor_name, zone: b.zone_name || '—', rateType: b.rate_type,
+        amount: (Number(b.deposit_amount) || 0) / daysInclusive(b.start_date, b.end_date),
+        payStatus: b.payment_status || 'unpaid'
+      };
+    }).sort(function(a, b){ return a.code.localeCompare(b.code, undefined, { numeric:true }); });
+  }
+
   function dashState(){
     if (!state.dash){
       var t = todayStr();
-      state.dash = { mode:'month', year:+t.slice(0,4), month:+t.slice(5,7) - 1, week:mondayOf(t) };
+      state.dash = { mode:'month', year:+t.slice(0,4), month:+t.slice(5,7) - 1, week:mondayOf(t), day:t };
     }
     return state.dash;
   }
@@ -1180,6 +1195,22 @@
         var a = w < p.from ? p.from : w, b = addDaysIso(w, 6) > p.to ? p.to : addDaysIso(w, 6);
         p.rows.push({ label: rangeLabel(a, b), from:a, to:b });
       }
+    } else if (d.mode === 'day'){
+      var wd = weekdayIdx(d.day);
+      p.from = d.day; p.to = d.day;
+      p.title = 'สรุปประจำวัน' + DAY_NAMES_FULL[wd] + 'ที่ ' + fmtDate(d.day);
+      p.navLabel = DAY_NAMES[wd] + ' ' + fmtDate(d.day);
+      p.prev = { from: addDaysIso(d.day, -1), to: addDaysIso(d.day, -1) };
+      p.compareLabel = 'วันก่อน';
+      p.trendTitle = 'ยอดค่าเช่ารายวัน (14 วันล่าสุดถึงวันที่เลือก)';
+      p.trend = [];
+      for (var k = 13; k >= 0; k--){
+        var day = addDaysIso(d.day, -k);
+        p.trend.push({ key:day, label:shortDate(day), longLabel:DAY_NAMES_FULL[weekdayIdx(day)] + ' ' + fmtDate(day), from:day, to:day });
+      }
+      p.selectedKey = d.day;
+      p.rowsHead = null;
+      p.rows = [];
     } else {
       p.from = d.week; p.to = addDaysIso(d.week, 6);
       p.title = 'สรุปประจำสัปดาห์ ' + rangeLabel(p.from, p.to) + ' ' + p.to.slice(0,4);
@@ -1230,7 +1261,7 @@
     var y = function(v){ return padT + plotH - v / max * plotH; };
     var colW = plotW / buckets.length;
     var barW = Math.max(6, Math.min(36, colW * 0.56));
-    var labelEvery = colW < 44 ? 2 : 1;
+    var labelEvery = Math.ceil(46 / colW);
     var out = ['<svg class="dash-chart-svg" width="' + width + '" height="' + H + '" viewBox="0 0 ' + width + ' ' + H + '" role="img" aria-label="กราฟยอดค่าเช่า แยกขาจรและขาประจำ">'];
     for (var v = 0; v <= max + 1e-9; v += scale.step){
       var gy = y(v).toFixed(1);
@@ -1257,10 +1288,11 @@
   function kpiTile(label, value, sub){
     return '<div class="kpi"><div class="kpi-label">' + label + '</div><div class="kpi-value mono">' + value + '</div>' + (sub ? '<div class="kpi-sub">' + sub + '</div>' : '') + '</div>';
   }
-  function pctChange(now, before){
-    if (!before) return now ? 'ใหม่ — ไม่มียอดในช่วงก่อนหน้า' : '';
+  function changeNote(now, before, label){
+    if (!before) return now ? 'ไม่มียอด' + label + 'ให้เทียบ' : '';
     var p = Math.round((now - before) / before * 100);
-    return (p > 0 ? '▲ ' : p < 0 ? '▼ ' : '') + Math.abs(p) + '%';
+    if (p === 0) return 'เท่ากับ' + label;
+    return (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + '% เทียบ' + label;
   }
 
   function renderSummaryAdmin(panel){
@@ -1272,13 +1304,36 @@
     var occupancy = activeStalls ? Math.round(cur.stallDays / (activeStalls * cur.days) * 1000) / 10 : 0;
     p.trend.forEach(function(b){ b.data = revenueBetween(b.from, b.to); });
     var rows = p.rows.map(function(r){ r.data = revenueBetween(r.from, r.to); return r; });
-    var change = pctChange(cur.amount, prev.amount);
+    var dayList = d.mode === 'day' ? bookingsOnDay(d.day) : [];
 
-    var rowHtml = rows.map(function(r){
-      var x = r.data;
-      return '<tr><td>' + esc(r.label) + '</td><td class="mono">' + money0(x.guest.amount) + '</td><td class="mono">' + money0(x.regular.amount) + '</td>' +
-        '<td class="mono"><strong>' + money0(x.amount) + '</strong></td><td class="mono">' + money0(x.confirmed) + '</td><td class="mono">' + x.stallDays + '</td></tr>';
-    }).join('');
+    var breakdownCard;
+    if (d.mode === 'day'){
+      var dayRows = dayList.map(function(b){
+        return '<tr><td class="mono">' + esc(b.code) + '</td><td>' + esc(b.vendor) + '</td><td>' + esc(b.zone) + '</td>' +
+          '<td>' + (b.rateType === 'regular' ? 'ขาประจำ' : 'ขาจร') + '</td><td class="mono">' + money0(b.amount) + '</td>' +
+          '<td><span class="paybadge ' + esc(b.payStatus) + '">' + esc(payStatusLabel(b.payStatus)) + '</span></td></tr>';
+      }).join('');
+      breakdownCard = '<div class="card" style="padding:16px">' +
+        '<div class="kicker">รายการจองที่ใช้ล็อกวันนี้</div>' +
+        '<div class="table-wrap"><table><thead><tr><th>ล็อก</th><th>ผู้ขาย</th><th>โซน</th><th>ประเภท</th><th>ยอดวันนี้</th><th>การชำระเงิน</th></tr></thead>' +
+        '<tbody>' + (dayRows
+          ? dayRows + '<tr class="total-row"><td colspan="4">รวม ' + dayList.length + ' ล็อก</td><td class="mono">' + money0(cur.amount) + '</td><td></td></tr>'
+          : '<tr><td colspan="6" class="empty small">ไม่มีการจองที่อนุมัติในวันนี้</td></tr>') +
+        '</tbody></table></div></div>';
+    } else {
+      var rowHtml = rows.map(function(r){
+        var x = r.data;
+        return '<tr><td>' + esc(r.label) + '</td><td class="mono">' + money0(x.guest.amount) + '</td><td class="mono">' + money0(x.regular.amount) + '</td>' +
+          '<td class="mono"><strong>' + money0(x.amount) + '</strong></td><td class="mono">' + money0(x.confirmed) + '</td><td class="mono">' + x.stallDays + '</td></tr>';
+      }).join('');
+      breakdownCard = '<div class="card" style="padding:16px">' +
+        '<div class="kicker">แยกตาม' + p.rowsHead + '</div>' +
+        '<div class="table-wrap"><table><thead><tr><th>' + p.rowsHead + '</th><th>ขาจร</th><th>ขาประจำ</th><th>รวม</th><th>รับเงินแล้ว</th><th>ล็อก-วัน</th></tr></thead>' +
+        '<tbody>' + rowHtml +
+          '<tr class="total-row"><td>รวมทั้งหมด</td><td class="mono">' + money0(cur.guest.amount) + '</td><td class="mono">' + money0(cur.regular.amount) + '</td>' +
+          '<td class="mono">' + money0(cur.amount) + '</td><td class="mono">' + money0(cur.confirmed) + '</td><td class="mono">' + cur.stallDays + '</td></tr>' +
+        '</tbody></table></div></div>';
+    }
     var zoneRows = cur.zones.map(function(z){
       return '<tr><td>' + esc(z.name) + '</td><td class="mono">' + z.stallDays + '</td><td class="mono">' + money0(z.amount) + '</td></tr>';
     }).join('');
@@ -1292,6 +1347,7 @@
         '<div class="seg" role="group" aria-label="รูปแบบรายงาน">' +
           '<button type="button" class="seg-btn' + (d.mode === 'month' ? ' active' : '') + '" data-dashmode="month" aria-pressed="' + (d.mode === 'month') + '">รายเดือน</button>' +
           '<button type="button" class="seg-btn' + (d.mode === 'week' ? ' active' : '') + '" data-dashmode="week" aria-pressed="' + (d.mode === 'week') + '">รายสัปดาห์</button>' +
+          '<button type="button" class="seg-btn' + (d.mode === 'day' ? ' active' : '') + '" data-dashmode="day" aria-pressed="' + (d.mode === 'day') + '">รายวัน</button>' +
         '</div>' +
         '<div class="dash-nav">' +
           '<button type="button" class="btn small ghost" data-dashstep="-1" aria-label="ช่วงก่อนหน้า">‹</button>' +
@@ -1305,9 +1361,10 @@
         '</div>' +
       '</div>' +
       '<div class="dash-report">' +
-        '<div class="section-head" style="margin-bottom:0"><h2>' + esc(p.title) + '</h2><span class="muted small">' + fmtDate(p.from) + ' – ' + fmtDate(p.to) + '</span></div>' +
+        '<div class="section-head" style="margin-bottom:0"><h2>' + esc(p.title) + '</h2>' +
+          (p.from !== p.to ? '<span class="muted small">' + fmtDate(p.from) + ' – ' + fmtDate(p.to) + '</span>' : '') + '</div>' +
         '<div class="kpi-row">' +
-          kpiTile('ยอดค่าเช่า (อนุมัติแล้ว)', money0(cur.amount), change ? esc(change) + ' เทียบ' + p.compareLabel : '') +
+          kpiTile('ยอดค่าเช่า (อนุมัติแล้ว)', money0(cur.amount), esc(changeNote(cur.amount, prev.amount, p.compareLabel))) +
           kpiTile('รับเงินแล้ว', money0(cur.confirmed), cur.amount ? 'คิดเป็น ' + Math.round(cur.confirmed / cur.amount * 100) + '% ของยอด' : '') +
           kpiTile('จำนวนการจอง', String(cur.bookings), 'ขาจร ' + cur.guest.bookings + ' · ขาประจำ ' + cur.regular.bookings) +
           kpiTile('อัตราการใช้ล็อก', occupancy + '%', cur.stallDays + ' ล็อก-วัน จาก ' + activeStalls + ' ล็อก × ' + cur.days + ' วัน') +
@@ -1318,14 +1375,7 @@
           '<div class="dash-chart" id="dashChart"></div>' +
           '<div class="muted small no-print">แตะแท่งกราฟเพื่อดูรายงานของช่วงนั้น</div>' +
         '</div>' +
-        '<div class="card" style="padding:16px">' +
-          '<div class="kicker">แยกตาม' + p.rowsHead + '</div>' +
-          '<div class="table-wrap"><table><thead><tr><th>' + p.rowsHead + '</th><th>ขาจร</th><th>ขาประจำ</th><th>รวม</th><th>รับเงินแล้ว</th><th>ล็อก-วัน</th></tr></thead>' +
-          '<tbody>' + rowHtml +
-            '<tr class="total-row"><td>รวมทั้งหมด</td><td class="mono">' + money0(cur.guest.amount) + '</td><td class="mono">' + money0(cur.regular.amount) + '</td>' +
-            '<td class="mono">' + money0(cur.amount) + '</td><td class="mono">' + money0(cur.confirmed) + '</td><td class="mono">' + cur.stallDays + '</td></tr>' +
-          '</tbody></table></div>' +
-        '</div>' +
+        breakdownCard +
         '<div class="dash-split">' +
           '<div class="card" style="padding:16px"><div class="kicker">แยกตามโซน</div><div class="table-wrap"><table><thead><tr><th>โซน</th><th>ล็อก-วัน</th><th>ยอด</th></tr></thead><tbody>' + (zoneRows || none) + '</tbody></table></div></div>' +
           '<div class="card" style="padding:16px"><div class="kicker">ล็อกยอดนิยม</div><div class="table-wrap"><table><thead><tr><th>ล็อก</th><th>ล็อก-วัน</th><th>ยอด</th></tr></thead><tbody>' + (stallRows || none) + '</tbody></table></div></div>' +
@@ -1340,7 +1390,9 @@
     tip.hidden = true;
     chartHost.appendChild(tip);
     var selectBucket = function(key){
-      if (d.mode === 'month') d.month = +key; else d.week = key;
+      if (d.mode === 'month') d.month = +key;
+      else if (d.mode === 'day') d.day = key;
+      else d.week = key;
       render();
     };
     chartHost.querySelectorAll('.dash-hit').forEach(function(hit){
@@ -1375,6 +1427,8 @@
           var m = d.month + step;
           d.year += Math.floor(m / 12);
           d.month = ((m % 12) + 12) % 12;
+        } else if (d.mode === 'day'){
+          d.day = addDaysIso(d.day, step);
         } else {
           d.week = addDaysIso(d.week, 7 * step);
         }
@@ -1384,11 +1438,20 @@
     document.getElementById('dashToday').onclick = function(){ state.dash = null; dashState().mode = d.mode; render(); };
     document.getElementById('dashPrint').onclick = function(){ window.print(); };
     document.getElementById('dashCsv').onclick = function(){
-      var lines = [[p.title], [], [p.rowsHead, 'ขาจร (บาท)', 'ขาประจำ (บาท)', 'รวม (บาท)', 'รับเงินแล้ว (บาท)', 'ล็อก-วัน']];
-      rows.forEach(function(r){
-        lines.push([r.label, Math.round(r.data.guest.amount), Math.round(r.data.regular.amount), Math.round(r.data.amount), Math.round(r.data.confirmed), r.data.stallDays]);
-      });
-      lines.push(['รวมทั้งหมด', Math.round(cur.guest.amount), Math.round(cur.regular.amount), Math.round(cur.amount), Math.round(cur.confirmed), cur.stallDays]);
+      var lines = [[p.title], []];
+      if (d.mode === 'day'){
+        lines.push(['ล็อก', 'ผู้ขาย', 'โซน', 'ประเภท', 'ยอดวันนี้ (บาท)', 'การชำระเงิน']);
+        dayList.forEach(function(b){
+          lines.push([b.code, b.vendor, b.zone, b.rateType === 'regular' ? 'ขาประจำ' : 'ขาจร', Math.round(b.amount), payStatusLabel(b.payStatus)]);
+        });
+        lines.push(['รวม', dayList.length + ' ล็อก', '', '', Math.round(cur.amount), '']);
+      } else {
+        lines.push([p.rowsHead, 'ขาจร (บาท)', 'ขาประจำ (บาท)', 'รวม (บาท)', 'รับเงินแล้ว (บาท)', 'ล็อก-วัน']);
+        rows.forEach(function(r){
+          lines.push([r.label, Math.round(r.data.guest.amount), Math.round(r.data.regular.amount), Math.round(r.data.amount), Math.round(r.data.confirmed), r.data.stallDays]);
+        });
+        lines.push(['รวมทั้งหมด', Math.round(cur.guest.amount), Math.round(cur.regular.amount), Math.round(cur.amount), Math.round(cur.confirmed), cur.stallDays]);
+      }
       lines.push([]);
       lines.push(['จำนวนการจอง', cur.bookings, 'ขาจร', cur.guest.bookings, 'ขาประจำ', cur.regular.bookings]);
       lines.push(['อัตราการใช้ล็อก (%)', occupancy]);
@@ -1397,7 +1460,7 @@
       var blob = new Blob(['﻿' + csv], { type:'text/csv;charset=utf-8' });
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'talat-pinklao-' + (d.mode === 'month' ? 'month-' + p.from.slice(0,7) : 'week-' + p.from) + '.csv';
+      a.download = 'talat-pinklao-' + (d.mode === 'month' ? 'month-' + p.from.slice(0,7) : d.mode + '-' + p.from) + '.csv';
       document.body.appendChild(a);
       a.click();
       setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
