@@ -76,8 +76,13 @@ const SCHEMA = [
     active INTEGER NOT NULL DEFAULT 1,
     is_regular INTEGER NOT NULL DEFAULT 0,
     joined_at TIMESTAMPTZ DEFAULT NOW(),
-    last_booking_at TIMESTAMPTZ
+    last_booking_at TIMESTAMPTZ,
+    categories TEXT,
+    food_types TEXT
   )`,
+  // What a registered vendor sells: comma-separated category ids, plus food sub-types when they sell food.
+  'ALTER TABLE vendors ADD COLUMN IF NOT EXISTS categories TEXT',
+  'ALTER TABLE vendors ADD COLUMN IF NOT EXISTS food_types TEXT',
   `CREATE TABLE IF NOT EXISTS zones (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -158,7 +163,7 @@ const SCHEMA = [
 // Column lists used by backup/restore, in foreign-key-safe insert order. Keep in sync with SCHEMA.
 db.TABLES = [
   { name: 'admins', serial: false, cols: ['username', 'name', 'password_hash', 'role', 'active', 'created_at'] },
-  { name: 'vendors', serial: false, cols: ['id', 'name', 'phone', 'category', 'password_hash', 'active', 'is_regular', 'joined_at', 'last_booking_at'] },
+  { name: 'vendors', serial: false, cols: ['id', 'name', 'phone', 'category', 'password_hash', 'active', 'is_regular', 'joined_at', 'last_booking_at', 'categories', 'food_types'] },
   { name: 'zones', serial: true, cols: ['id', 'name', 'description', 'color_index', 'sort_order'] },
   { name: 'stalls', serial: true, cols: ['id', 'zone_id', 'code', 'size_sqm', 'category', 'price_per_day', 'regular_price_per_day', 'pos_row', 'pos_col', 'active'] },
   { name: 'bookings', serial: true, cols: ['id', 'stall_id', 'zone_id', 'vendor_token', 'vendor_name', 'vendor_phone', 'category', 'start_date', 'end_date', 'note', 'deposit_amount', 'rate_type', 'payment_method', 'payment_status', 'receipt_path', 'status', 'created_at', 'decided_at'] },

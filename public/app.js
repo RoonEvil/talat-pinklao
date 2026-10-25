@@ -31,6 +31,22 @@
   ];
   function categoryMeta(id){ return CATEGORIES.find(function(c){ return c.id===id; }) || CATEGORIES[CATEGORIES.length-1]; }
 
+  // Food vendors also say what kind of food they sell. Keep ids in sync with FOOD_TYPE_IDS in server/routes/auth.js.
+  var FOOD_TYPES = [
+    { id:'ready_meal', label:'ข้าวแกง / อาหารปรุงสำเร็จ', icon:'🍛' },
+    { id:'made_to_order', label:'อาหารตามสั่ง / ก๋วยเตี๋ยว', icon:'🍜' },
+    { id:'grill_fried', label:'ปิ้งย่าง / ของทอด', icon:'🍢' },
+    { id:'dessert', label:'ขนมไทย / ของหวาน', icon:'🍡' },
+    { id:'bakery', label:'เบเกอรี่', icon:'🥐' },
+    { id:'drink', label:'เครื่องดื่ม', icon:'🥤' },
+    { id:'fruit', label:'ผลไม้', icon:'🍉' },
+    { id:'fresh', label:'อาหารสด (ผัก เนื้อ ปลา)', icon:'🥬' }
+  ];
+  function foodTypeLabel(id){ var f = FOOD_TYPES.find(function(x){ return x.id===id; }); return f ? f.label : id; }
+  function checkedValues(root, name){
+    return [].slice.call(root.querySelectorAll('input[name="'+name+'"]:checked')).map(function(i){ return i.value; });
+  }
+
   var PAYMENT_METHODS = [
     { id:'promptpay', label:'โอนผ่านพร้อมเพย์' },
     { id:'bank', label:'โอนผ่านธนาคาร' },
@@ -546,10 +562,14 @@
     var root = document.getElementById('modalRoot');
     var minDate = todayStr();
     var isRegistered = profile.isRegistered;
-    var myCategory = stall.category || 'other';
     var regularRate = stall.regular_price_per_day != null ? stall.regular_price_per_day : stall.price_per_day;
+    // A registered account picks only from the goods it signed up to sell (the server checks this too).
+    var allowedCats = isRegistered && profile.categories && profile.categories.length ? profile.categories : null;
+    var catChoices = allowedCats ? CATEGORIES.filter(function(c){ return allowedCats.indexOf(c.id) !== -1; }) : CATEGORIES;
+    var myCategory = stall.category || 'other';
+    if (allowedCats && allowedCats.indexOf(myCategory) === -1) myCategory = catChoices[0].id;
 
-    var catOptions = CATEGORIES.map(function(c){
+    var catOptions = catChoices.map(function(c){
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
 
@@ -663,9 +683,20 @@
       '<div class="field"><label for="afUser">ชื่อผู้ใช้</label><input id="afUser" autocomplete="username" required></div>' +
       '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="current-password" required></div>';
 
+    var categoryChecks = CATEGORIES.map(function(c){
+      return '<label class="check-chip"><input type="checkbox" name="afCat" value="'+c.id+'">'+c.icon+' '+esc(c.label)+'</label>';
+    }).join('');
+    var foodChecks = FOOD_TYPES.map(function(f){
+      return '<label class="check-chip"><input type="checkbox" name="afFood" value="'+f.id+'">'+f.icon+' '+esc(f.label)+'</label>';
+    }).join('');
+
     var registerFields =
       '<div class="field"><label for="afName">ชื่อ-นามสกุล</label><input id="afName" required value="'+esc(profile.vendorName)+'"></div>' +
       '<div class="field"><label for="afPhone">เบอร์โทรศัพท์</label><input id="afPhone" required placeholder="08X-XXX-XXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
+      '<div class="field"><span class="field-label" id="afCatLabel">ประเภทสินค้าที่จะขาย <span class="muted">(เลือกได้หลายอย่าง อย่างน้อย 1)</span></span>' +
+        '<div class="check-grid" role="group" aria-labelledby="afCatLabel">'+categoryChecks+'</div></div>' +
+      '<div class="field food-types" id="afFoodBox" hidden><span class="field-label" id="afFoodLabel">ขายอาหารประเภทไหน <span class="muted">(อย่างน้อย 1)</span></span>' +
+        '<div class="check-grid" role="group" aria-labelledby="afFoodLabel">'+foodChecks+'</div></div>' +
       '<div class="field"><label for="afUser">ชื่อผู้ใช้</label><input id="afUser" autocomplete="username" required></div>' +
       '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="new-password" required></div>';
 
@@ -694,6 +725,10 @@
     document.getElementById('authToggle').querySelectorAll('.auth-toggle-btn').forEach(function(btn){
       btn.addEventListener('click', function(){ openAuthModal(btn.dataset.authmode); });
     });
+    var foodBox = document.getElementById('afFoodBox');
+    if (foodBox){
+      root.querySelector('input[name="afCat"][value="food"]').addEventListener('change', function(){ foodBox.hidden = !this.checked; });
+    }
 
     document.getElementById('authForm').addEventListener('submit', function(e){
       e.preventDefault();
@@ -705,14 +740,21 @@
       if (mode === 'register'){
         var name = document.getElementById('afName').value.trim();
         var phone = document.getElementById('afPhone').value.trim();
+        var categories = checkedValues(root, 'afCat');
+        var sellsFood = categories.indexOf('food') !== -1;
+        var foodTypes = sellsFood ? checkedValues(root, 'afFood') : [];
         if (!name || !phone || !username || !password){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
+        if (!categories.length){ errEl.textContent = 'กรุณาเลือกประเภทสินค้าที่จะขายอย่างน้อย 1 อย่าง'; return; }
+        if (sellsFood && !foodTypes.length){ errEl.textContent = 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง'; return; }
         submitBtn.disabled = true;
-        apiPost('/api/auth/register', { name:name, phone:phone, username:username, password:password })
+        apiPost('/api/auth/register', { name:name, phone:phone, username:username, password:password, categories:categories, foodTypes:foodTypes })
           .then(function(res){
             saveToken(res.token);
             profile.vendorToken = res.user.id;
             profile.vendorName = res.user.name;
             profile.vendorPhone = res.user.phone;
+            profile.categories = res.user.categories || [];
+            profile.foodTypes = res.user.foodTypes || [];
             profile.isRegistered = true;
             saveProfile();
             closeModal();
@@ -742,6 +784,8 @@
           profile.vendorToken = res.user.id;
           profile.vendorName = res.user.name;
           profile.vendorPhone = res.user.phone;
+          profile.categories = res.user.categories || [];
+          profile.foodTypes = res.user.foodTypes || [];
           profile.isRegistered = true;
           saveProfile();
           closeModal();
@@ -1615,8 +1659,12 @@
     var rows = state.vendors.map(function(v){
       var blocked = !v.active;
       var regular = !!v.is_regular;
+      var cats = v.categories ? v.categories.split(',') : [v.category];
+      var foods = v.food_types ? v.food_types.split(',').map(foodTypeLabel) : [];
+      var goods = cats.map(function(id){ var m = categoryMeta(id); return m.icon + ' ' + esc(m.label); }).join('<br>') +
+        (foods.length ? '<div class="muted small">อาหาร: ' + esc(foods.join(', ')) + '</div>' : '');
       return '<tr><td>'+esc(v.name)+(regular?' <span class="pill on-primary small">ลูกค้าประจำ</span>':'')+'</td><td>'+esc(v.phone)+'</td>' +
-        '<td>'+categoryMeta(v.category).icon+' '+esc(categoryMeta(v.category).label)+'</td>' +
+        '<td>'+goods+'</td>' +
         '<td>'+v.booking_total+' ครั้ง · อนุมัติ '+v.booking_approved+'</td>' +
         '<td>'+fmtDate((v.joined_at||todayStr()).slice(0,10))+'</td>' +
         '<td><span class="badge '+(blocked?'cancelled':'approved')+'">'+(blocked?'ถูกระงับ':'ใช้งานอยู่')+'</span></td>' +
