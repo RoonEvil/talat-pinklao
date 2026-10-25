@@ -39,12 +39,13 @@ router.post('/register', wrap(async (req, res) => {
   if (password.length < 4) {
     return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
   }
-  const categories = pickKnown(req.body.categories, CATEGORY_IDS);
-  if (!categories.length) {
-    return res.status(400).json({ error: 'กรุณาเลือกประเภทสินค้าที่จะขายอย่างน้อย 1 อย่าง' });
+  // Each account sells exactly one category of goods.
+  const category = CATEGORY_IDS.includes(req.body.category) ? req.body.category : null;
+  if (!category) {
+    return res.status(400).json({ error: 'กรุณาเลือกหมวดสินค้าที่จะขาย 1 หมวด' });
   }
-  const foodTypes = categories.includes('food') ? pickKnown(req.body.foodTypes, FOOD_TYPE_IDS) : [];
-  if (categories.includes('food') && !foodTypes.length) {
+  const foodTypes = category === 'food' ? pickKnown(req.body.foodTypes, FOOD_TYPE_IDS) : [];
+  if (category === 'food' && !foodTypes.length) {
     return res.status(400).json({ error: 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง' });
   }
   const adminClash = await db.get('SELECT username FROM admins WHERE username = ?', [username]);
@@ -56,7 +57,7 @@ router.post('/register', wrap(async (req, res) => {
   const vendor = await db.get(
     `INSERT INTO vendors (id, name, phone, category, password_hash, active, is_regular, categories, food_types)
      VALUES (?,?,?,?,?,1,0,?,?) RETURNING id, name, phone, categories, food_types`,
-    [username, name, phone, categories[0], hash, categories.join(','), foodTypes.length ? foodTypes.join(',') : null]
+    [username, name, phone, category, hash, category, foodTypes.length ? foodTypes.join(',') : null]
   );
 
   const token = jwt.sign({ kind: 'vendor', id: username, name, phone }, JWT_SECRET, { expiresIn: '30d' });

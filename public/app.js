@@ -684,7 +684,7 @@
       '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="current-password" required></div>';
 
     var categoryChecks = CATEGORIES.map(function(c){
-      return '<label class="check-chip"><input type="checkbox" name="afCat" value="'+c.id+'">'+c.icon+' '+esc(c.label)+'</label>';
+      return '<label class="check-chip"><input type="radio" name="afCat" value="'+c.id+'">'+c.icon+' '+esc(c.label)+'</label>';
     }).join('');
     var foodChecks = FOOD_TYPES.map(function(f){
       return '<label class="check-chip"><input type="checkbox" name="afFood" value="'+f.id+'">'+f.icon+' '+esc(f.label)+'</label>';
@@ -693,8 +693,8 @@
     var registerFields =
       '<div class="field"><label for="afName">ชื่อ-นามสกุล</label><input id="afName" required value="'+esc(profile.vendorName)+'"></div>' +
       '<div class="field"><label for="afPhone">เบอร์โทรศัพท์</label><input id="afPhone" required placeholder="08X-XXX-XXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
-      '<div class="field"><span class="field-label" id="afCatLabel">ประเภทสินค้าที่จะขาย <span class="muted">(เลือกได้หลายอย่าง อย่างน้อย 1)</span></span>' +
-        '<div class="check-grid" role="group" aria-labelledby="afCatLabel">'+categoryChecks+'</div></div>' +
+      '<div class="field"><span class="field-label" id="afCatLabel">หมวดสินค้าที่จะขาย <span class="muted">(เลือก 1 หมวด)</span></span>' +
+        '<div class="check-grid" role="radiogroup" aria-labelledby="afCatLabel">'+categoryChecks+'</div></div>' +
       '<div class="field food-types" id="afFoodBox" hidden><span class="field-label" id="afFoodLabel">ขายอาหารประเภทไหน <span class="muted">(อย่างน้อย 1)</span></span>' +
         '<div class="check-grid" role="group" aria-labelledby="afFoodLabel">'+foodChecks+'</div></div>' +
       '<div class="field"><label for="afUser">ชื่อผู้ใช้</label><input id="afUser" autocomplete="username" required></div>' +
@@ -727,7 +727,9 @@
     });
     var foodBox = document.getElementById('afFoodBox');
     if (foodBox){
-      root.querySelector('input[name="afCat"][value="food"]').addEventListener('change', function(){ foodBox.hidden = !this.checked; });
+      root.querySelectorAll('input[name="afCat"]').forEach(function(radio){
+        radio.addEventListener('change', function(){ foodBox.hidden = checkedValues(root, 'afCat')[0] !== 'food'; });
+      });
     }
 
     document.getElementById('authForm').addEventListener('submit', function(e){
@@ -740,14 +742,13 @@
       if (mode === 'register'){
         var name = document.getElementById('afName').value.trim();
         var phone = document.getElementById('afPhone').value.trim();
-        var categories = checkedValues(root, 'afCat');
-        var sellsFood = categories.indexOf('food') !== -1;
-        var foodTypes = sellsFood ? checkedValues(root, 'afFood') : [];
+        var category = checkedValues(root, 'afCat')[0];
+        var foodTypes = category === 'food' ? checkedValues(root, 'afFood') : [];
         if (!name || !phone || !username || !password){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
-        if (!categories.length){ errEl.textContent = 'กรุณาเลือกประเภทสินค้าที่จะขายอย่างน้อย 1 อย่าง'; return; }
-        if (sellsFood && !foodTypes.length){ errEl.textContent = 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง'; return; }
+        if (!category){ errEl.textContent = 'กรุณาเลือกหมวดสินค้าที่จะขาย 1 หมวด'; return; }
+        if (category === 'food' && !foodTypes.length){ errEl.textContent = 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง'; return; }
         submitBtn.disabled = true;
-        apiPost('/api/auth/register', { name:name, phone:phone, username:username, password:password, categories:categories, foodTypes:foodTypes })
+        apiPost('/api/auth/register', { name:name, phone:phone, username:username, password:password, category:category, foodTypes:foodTypes })
           .then(function(res){
             saveToken(res.token);
             profile.vendorToken = res.user.id;
