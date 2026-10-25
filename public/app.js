@@ -501,14 +501,19 @@
       return '<button type="button" class="btn small ghost" data-mapzone="'+z.id+'"><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>'+esc(z.name)+'</button>';
     }).join('');
 
+    var oldNews = host.querySelector('.news-list');
+    var newsScroll = oldNews ? oldNews.scrollTop : 0;
     host.innerHTML =
       '<div class="section-head"><h2>ผังตลาด</h2><span class="muted small">แตะที่ล็อกบนแผนผังเพื่อขอจอง</span></div>' +
-      '<div class="card isomap-card">' +
-        '<div class="isomap-toolbar">' + zoneButtons +
-          '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
+      '<div class="map-layout">' +
+        '<div class="card isomap-card">' +
+          '<div class="isomap-toolbar">' + zoneButtons +
+            '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
+          '</div>' +
+          '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
+          '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
         '</div>' +
-        '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
-        '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
+        newsBoardHtml() +
       '</div>' +
       legend +
       '<div class="section-head"><h2 style="font-size:1rem">รายการล็อกแยกตามโซน</h2></div>' +
@@ -517,7 +522,36 @@
     host.querySelectorAll('.stall:not([disabled])').forEach(function(btn){
       btn.addEventListener('click', function(){ openBookingModal(btn.dataset.stall); });
     });
+    var newsList = host.querySelector('.news-list');
+    if (newsList) newsList.scrollTop = newsScroll;
+    host.querySelectorAll('[data-news]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var a = state.announcements.find(function(x){ return String(x.id) === btn.dataset.news; });
+        if (a) previewAnnouncement(a);
+      });
+    });
     mountPublicMap(host);
+  }
+
+  // News board beside the market map, so an announcement can still be read after its pop-up has gone.
+  var NEWS_NEW_MS = 3 * 24 * 3600 * 1000;
+  var NEWS_BADGE = { rule:'rejected', holiday:'pending', event:'approved', news:'cancelled' };
+  function newsBoardHtml(){
+    var list = (state.announcements || []).slice().sort(function(a, b){ return b.id - a.id; });
+    var items = list.map(function(a){
+      var isNew = Date.now() - Date.parse(a.created_at) < NEWS_NEW_MS;
+      return '<li><button type="button" class="news-item" data-news="'+a.id+'" title="แตะเพื่อเปิดประกาศ">' +
+        '<span class="news-meta"><span class="badge '+(NEWS_BADGE[a.type] || 'cancelled')+'">'+esc(announceTypeLabel(a.type))+'</span>' +
+          (isNew ? '<span class="pill on-accent small">ใหม่</span>' : '') +
+          '<span class="muted small">'+fmtDate((a.created_at || '').slice(0, 10) || todayStr())+'</span></span>' +
+        '<span class="news-title">'+esc(a.title)+'</span>' +
+        '<span class="news-body">'+esc(a.body)+'</span>' +
+      '</button></li>';
+    }).join('');
+    return '<aside class="card news-board" aria-labelledby="newsHead">' +
+      '<div class="news-head"><h3 id="newsHead">ข่าวประกาศ</h3><span class="muted small">'+list.length+' รายการ</span></div>' +
+      (items ? '<ul class="news-list">'+items+'</ul>' : '<div class="empty small">ยังไม่มีประกาศ</div>') +
+      '</aside>';
   }
 
   function mapZoomControls(){
