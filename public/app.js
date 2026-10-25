@@ -274,7 +274,7 @@
   function refreshAdminData(){
     if (!profile.isAdmin) return;
     if (['approvals','bookings','summary'].indexOf(state.adminSection) !== -1) loadAdminBookings();
-    if (state.adminSection==='vendors') loadVendors();
+    if (state.adminSection==='vendors' || state.adminSection==='walkin') loadVendors();
     if (state.adminSection==='admins' && profile.isHeadAdmin) loadAdmins();
     if (state.adminSection==='audit') { loadAdminBookings(); loadAudit(state.auditDate || todayStr()); loadFines(); }
   }
@@ -390,6 +390,46 @@
   function spotFree(l, rect, ignoreIdx){
     if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > l.cols || rect.y + rect.h > l.rows) return false;
     return !l.items.some(function(it, i){ return i !== ignoreIdx && rectsOverlap(it, rect); });
+  }
+
+  // ---------- identical goods may not stand side by side ----------
+  // Same rule as server/neighbors.js (the server has the final say): stalls whose map squares share an edge
+  // are neighbours, and neighbours may not sell the same thing in overlapping dates.
+  function rectsTouch(a, b){
+    var xOver = a.x < b.x + b.w && b.x < a.x + a.w, yOver = a.y < b.y + b.h && b.y < a.y + a.h;
+    return (xOver && (a.y + a.h === b.y || b.y + b.h === a.y)) || (yOver && (a.x + a.w === b.x || b.x + b.w === a.x));
+  }
+  function neighborStallIds(stallId){
+    var items = savedOrAutoLayout().items.filter(function(it){ return it.kind === 'stall'; });
+    var me = items.find(function(it){ return String(it.stallId) === String(stallId); });
+    if (!me) return [];
+    return items.filter(function(it){ return it !== me && rectsTouch(me, it); }).map(function(it){ return String(it.stallId); });
+  }
+  function goodsKey(category, foodType){
+    if (!category || category === 'other') return null;
+    if (category === 'food') return foodType ? 'food:' + foodType : null;
+    return category;
+  }
+  function goodsLabel(category, foodType){
+    return category === 'food' && foodType ? foodTypeLabel(foodType) : categoryMeta(category).label;
+  }
+  function neighborClash(stallId, category, foodType, start, end){
+    var key = goodsKey(category, foodType);
+    if (!key || !start || !end) return null;
+    var ids = neighborStallIds(stallId);
+    var hit = state.activeBookings.find(function(b){
+      return ids.indexOf(String(b.stallId)) !== -1 && overlaps(start, end, b.startDate, b.endDate) && goodsKey(b.category, b.foodType) === key;
+    });
+    if (!hit) return null;
+    var s = stallById(hit.stallId);
+    return '⚠ ล็อก ' + (s ? s.code : '?') + ' ที่อยู่ติดกันขาย' + goodsLabel(category, foodType) +
+      ' ช่วง ' + fmtDate(hit.startDate) + ' – ' + fmtDate(hit.endDate) + ' อยู่แล้ว ตลาดไม่ให้ร้านที่ขายของเหมือนกันอยู่ติดกัน ' +
+      'กรุณาเลือกล็อกอื่นหรือช่วงวันอื่น';
+  }
+  function foodOptionsHtml(choices, selected, placeholder){
+    return (placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '') + choices.map(function(f){
+      return '<option value="'+f.id+'" '+(f.id===selected?'selected':'')+'>'+f.icon+' '+esc(f.label)+'</option>';
+    }).join('');
   }
 
   // ---------- Market Map ----------
@@ -572,6 +612,9 @@
     var catOptions = catChoices.map(function(c){
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
+    var allowedFoods = isRegistered && profile.foodTypes && profile.foodTypes.length ? profile.foodTypes : null;
+    var foodChoices = allowedFoods ? FOOD_TYPES.filter(function(f){ return allowedFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES;
+    var foodOptions = foodOptionsHtml(foodChoices, foodChoices.length === 1 ? foodChoices[0].id : '', foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
@@ -581,10 +624,12 @@
         '<div class="field"><label for="bfName">ชื่อผู้ขาย</label><input id="bfName" required value="'+esc(profile.vendorName)+'"></div>' +
         '<div class="field"><label for="bfPhone">เบอร์โทรศัพท์</label><input id="bfPhone" required value="'+esc(profile.vendorPhone)+'" placeholder="08X-XXX-XXXX"></div>' +
         '<div class="field"><label for="bfCat">คุณขายอะไร?</label><select id="bfCat">'+catOptions+'</select></div>' +
+        '<div class="field" id="bfFoodWrap" hidden><label for="bfFood">ประเภทอาหาร</label><select id="bfFood">'+foodOptions+'</select></div>' +
         '<div class="field-row">' +
           '<div class="field"><label for="bfStart">วันที่เริ่ม</label><input type="date" id="bfStart" required min="'+minDate+'" value="'+minDate+'"></div>' +
           '<div class="field"><label for="bfEnd">วันที่สิ้นสุด</label><input type="date" id="bfEnd" required min="'+minDate+'" value="'+minDate+'"></div>' +
         '</div>' +
+        '<div class="clash-note" id="bfClash" role="alert" hidden></div>' +
         '<div class="field"><label for="bfNote">ข้อความถึงเจ้าหน้าที่ตลาด (ถ้ามี)</label><textarea id="bfNote" rows="2" placeholder="เช่น ขายลูกชิ้นปิ้ง ต้องการปลั๊กไฟ"></textarea></div>' +
         '<p class="deposit-note">ยังไม่ต้องจ่ายเงินตอนนี้ — เมื่อเจ้าหน้าที่อนุมัติแล้ว ปุ่ม "ชำระเงิน" จะขึ้นในหน้า "การจองของฉัน" '+(isRegistered?'':'สมาชิกที่ลงทะเบียน/ลูกค้าประจำจะได้ราคาพิเศษโดยอัตโนมัติ')+'</p>' +
         '<div class="form-error" id="bfErr"></div>' +
@@ -598,25 +643,40 @@
     var back = document.getElementById('mb');
     back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
     document.getElementById('bfCancel').onclick = closeModal;
+    var catSel = document.getElementById('bfCat'), foodSel = document.getElementById('bfFood');
+    var startEl = document.getElementById('bfStart'), endEl = document.getElementById('bfEnd');
+    var clashEl = document.getElementById('bfClash');
+    var submitBtn = root.querySelector('#bookForm button[type=submit]');
+    var syncGoods = function(){
+      var isFood = catSel.value === 'food';
+      document.getElementById('bfFoodWrap').hidden = !isFood;
+      var clash = neighborClash(stall.id, catSel.value, isFood ? foodSel.value : null, startEl.value, endEl.value);
+      clashEl.hidden = !clash;
+      clashEl.textContent = clash || '';
+      submitBtn.disabled = !!clash;
+    };
+    [catSel, foodSel, startEl, endEl].forEach(function(el){ el.addEventListener('change', syncGoods); });
+    syncGoods();
     document.getElementById('bookForm').addEventListener('submit', function(e){
       e.preventDefault();
       var name = document.getElementById('bfName').value.trim();
       var phone = document.getElementById('bfPhone').value.trim();
-      var category = document.getElementById('bfCat').value;
-      var start = document.getElementById('bfStart').value;
-      var end = document.getElementById('bfEnd').value;
+      var category = catSel.value;
+      var foodType = category === 'food' ? foodSel.value : null;
+      var start = startEl.value;
+      var end = endEl.value;
       var note = document.getElementById('bfNote').value.trim();
       var errEl = document.getElementById('bfErr');
-      var submitBtn = e.target.querySelector('button[type=submit]');
       if (!name || !phone || !start || !end){ errEl.textContent = 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ'; return; }
       if (end < start){ errEl.textContent = 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม'; return; }
+      if (category === 'food' && !foodType){ errEl.textContent = 'กรุณาเลือกประเภทอาหาร'; return; }
 
       profile.vendorName = name; profile.vendorPhone = phone; saveProfile();
       submitBtn.disabled = true;
 
       apiPost('/api/bookings', {
         stallId: stall.id, vendorToken: profile.vendorToken, vendorName: name, vendorPhone: phone,
-        category: category, startDate: start, endDate: end, note: note || null
+        category: category, foodType: foodType, startDate: start, endDate: end, note: note || null
       }).then(function(){
         toast('ส่งคำขอจองล็อก ' + stall.code + ' แล้ว');
         closeModal();
@@ -1014,7 +1074,7 @@
       return;
     }
     var sections = [
-      ['approvals','อนุมัติคำขอ'], ['bookings','การจองทั้งหมด'], ['summary','สรุปยอด'], ['vendors','ผู้ขาย'],
+      ['approvals','อนุมัติคำขอ'], ['walkin','จองแทนลูกค้า'], ['bookings','การจองทั้งหมด'], ['summary','สรุปยอด'], ['vendors','ผู้ขาย'],
       ['announcements','ประกาศ'], ['audit','ตรวจสอบตลาด'], ['zones','โซน'],
       ['stalls','ล็อก'], ['map','แผนผังตลาด'], ['settings','ตั้งค่า']
     ];
@@ -1057,6 +1117,7 @@
     else if (state.adminSection==='stalls') renderStallAdmin(panel);
     else if (state.adminSection==='map') renderMapAdmin(panel);
     else if (state.adminSection==='settings') renderSettingsAdmin(panel);
+    else if (state.adminSection==='walkin') renderWalkinAdmin(panel);
     else if (state.adminSection==='admins') renderAdminAccounts(panel);
   }
 
@@ -1120,6 +1181,131 @@
     wireReceiptThumbs(panel);
   }
 
+  // ---------- staff book on a customer's behalf ----------
+  // The form lives in state.walkin so the 10-second refresh, which re-renders the panel, keeps what was typed.
+  function newWalkin(){
+    return { stallId:'', start:todayStr(), end:todayStr(), mode:'new', vendorId:'', name:'', phone:'', category:'', foodType:'', note:'', paid:false };
+  }
+  function stallBusy(stallId, start, end){
+    return bookingsForStall(stallId).some(function(b){ return overlaps(start, end, b.startDate, b.endDate); });
+  }
+
+  function renderWalkinAdmin(panel){
+    var w = state.walkin || (state.walkin = newWalkin());
+    var vendor = w.mode === 'existing' ? state.vendors.find(function(v){ return v.id === w.vendorId; }) : null;
+    var vCats = vendor && vendor.categories ? vendor.categories.split(',') : null;
+    var vFoods = vendor && vendor.food_types ? vendor.food_types.split(',') : null;
+    var catChoices = vCats ? CATEGORIES.filter(function(c){ return vCats.indexOf(c.id) !== -1; }) : CATEGORIES;
+    if (w.category && !catChoices.some(function(c){ return c.id === w.category; })) w.category = '';
+    if (!w.category && vCats) w.category = catChoices[0].id;
+    var foodChoices = vFoods ? FOOD_TYPES.filter(function(f){ return vFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES;
+    if (w.foodType && !foodChoices.some(function(f){ return f.id === w.foodType; })) w.foodType = '';
+    if (!w.foodType && foodChoices.length === 1) w.foodType = foodChoices[0].id;
+
+    var datesOk = w.start && w.end && w.end >= w.start;
+    var stallOptions = state.zones.map(function(z){
+      var opts = stallsInZone(z.id).filter(function(s){ return s.active; }).sort(byRowCol).map(function(s){
+        var busy = datesOk && stallBusy(s.id, w.start, w.end);
+        return '<option value="'+s.id+'" '+(String(s.id)===String(w.stallId)?'selected':'')+(busy?' disabled':'')+'>' +
+          esc(s.code)+' · '+fmtMoney(s.price_per_day)+'/วัน'+(busy?' — ไม่ว่างช่วงนี้':'')+'</option>';
+      }).join('');
+      return opts ? '<optgroup label="'+esc(z.name)+'">'+opts+'</optgroup>' : '';
+    }).join('');
+    var stall = w.stallId ? stallById(w.stallId) : null;
+    if (stall && datesOk && stallBusy(stall.id, w.start, w.end)) { w.stallId = ''; stall = null; }
+
+    var vendorOptions = '<option value="">— เลือกผู้ขาย —</option>' + state.vendors.filter(function(v){ return v.active; })
+      .slice().sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'th'); })
+      .map(function(v){
+        return '<option value="'+esc(v.id)+'" '+(v.id===w.vendorId?'selected':'')+'>'+esc(v.name)+' · '+esc(v.phone)+(v.is_regular?' · ขาประจำ':'')+'</option>';
+      }).join('');
+    var catOptions = (vCats ? '' : '<option value="">— เลือกหมวดสินค้า —</option>') + catChoices.map(function(c){
+      return '<option value="'+c.id+'" '+(c.id===w.category?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
+    }).join('');
+
+    var isRegular = !!(vendor && vendor.is_regular);
+    var price = '';
+    if (stall && datesOk){
+      var rate = isRegular ? stall.regular_price_per_day : stall.price_per_day;
+      var days = daysInclusive(w.start, w.end);
+      price = 'ค่าเช่า ' + fmtMoney(rate) + ' × ' + days + ' วัน = <strong class="mono">' + fmtMoney(rate * days) + '</strong> (' + (isRegular ? 'ราคาสมาชิก' : 'ราคาทั่วไป') + ')';
+    }
+    var clash = stall && datesOk ? neighborClash(stall.id, w.category, w.category === 'food' ? w.foodType : null, w.start, w.end) : null;
+
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<p class="muted small" style="margin:0 0 12px">สำหรับลูกค้าที่จองผ่านแอปเองไม่สะดวก เช่น ผู้สูงอายุ การจองที่เจ้าหน้าที่ทำให้จะอนุมัติทันที</p>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="wkStart">วันที่เริ่ม</label><input type="date" id="wkStart" value="'+esc(w.start)+'"></div>' +
+        '<div class="field"><label for="wkEnd">วันที่สิ้นสุด</label><input type="date" id="wkEnd" value="'+esc(w.end)+'"></div>' +
+      '</div>' +
+      '<div class="field"><label for="wkStall">ล็อก</label><select id="wkStall"><option value="">— เลือกล็อก —</option>'+stallOptions+'</select></div>' +
+      '<div class="field"><span class="field-label">ลูกค้า</span><div class="seg" role="group" aria-label="ประเภทลูกค้า">' +
+        '<button type="button" class="seg-btn'+(w.mode==='new'?' active':'')+'" data-wkmode="new" aria-pressed="'+(w.mode==='new')+'">ลูกค้าใหม่ / ขาจร</button>' +
+        '<button type="button" class="seg-btn'+(w.mode==='existing'?' active':'')+'" data-wkmode="existing" aria-pressed="'+(w.mode==='existing')+'">ผู้ขายที่มีในระบบ</button>' +
+      '</div></div>' +
+      (w.mode === 'new'
+        ? '<div class="field-row">' +
+            '<div class="field"><label for="wkName">ชื่อลูกค้า</label><input id="wkName" value="'+esc(w.name)+'"></div>' +
+            '<div class="field"><label for="wkPhone">เบอร์โทรศัพท์</label><input id="wkPhone" value="'+esc(w.phone)+'" placeholder="08X-XXX-XXXX"></div>' +
+          '</div>'
+        : '<div class="field"><label for="wkVendor">ผู้ขาย</label><select id="wkVendor">'+vendorOptions+'</select></div>') +
+      '<div class="field-row">' +
+        '<div class="field"><label for="wkCat">หมวดสินค้า</label><select id="wkCat">'+catOptions+'</select></div>' +
+        (w.category === 'food'
+          ? '<div class="field"><label for="wkFood">ประเภทอาหาร</label><select id="wkFood">'+foodOptionsHtml(foodChoices, w.foodType, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —')+'</select></div>'
+          : '<div></div>') +
+      '</div>' +
+      '<div class="field"><label for="wkNote">หมายเหตุ (ถ้ามี)</label><input id="wkNote" value="'+esc(w.note)+'" placeholder="เช่น ลูกค้าโทรมาจอง"></div>' +
+      '<label class="checkline"><input type="checkbox" id="wkPaid" '+(w.paid?'checked':'')+'> รับเงินสดแล้ว</label>' +
+      (price ? '<p class="deposit-note" style="font-size:.88rem">'+price+'</p>' : '') +
+      (clash ? '<div class="clash-note" role="alert">'+esc(clash)+'</div>' : '') +
+      '<div class="form-error" id="wkErr"></div>' +
+      '<div class="form-actions"><button type="button" class="btn ghost" id="wkReset">ล้างฟอร์ม</button>' +
+        '<button type="button" class="btn primary" id="wkSubmit"'+(clash?' disabled':'')+'>จองให้ลูกค้า</button></div>' +
+      '</div>';
+
+    var bindChange = function(id, key){
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', function(){ w[key] = el.type === 'checkbox' ? el.checked : el.value; render(); });
+    };
+    var bindInput = function(id, key){
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('input', function(){ w[key] = el.value; });
+    };
+    bindChange('wkStart', 'start'); bindChange('wkEnd', 'end'); bindChange('wkStall', 'stallId');
+    bindChange('wkVendor', 'vendorId'); bindChange('wkCat', 'category'); bindChange('wkFood', 'foodType'); bindChange('wkPaid', 'paid');
+    bindInput('wkName', 'name'); bindInput('wkPhone', 'phone'); bindInput('wkNote', 'note');
+    panel.querySelectorAll('[data-wkmode]').forEach(function(btn){
+      btn.addEventListener('click', function(){ w.mode = btn.dataset.wkmode; w.category = ''; w.foodType = ''; render(); });
+    });
+    document.getElementById('wkReset').onclick = function(){ state.walkin = newWalkin(); render(); };
+    document.getElementById('wkSubmit').onclick = function(){
+      var errEl = document.getElementById('wkErr');
+      var problem = !w.stallId ? 'กรุณาเลือกล็อก' :
+        !datesOk ? 'กรุณาตรวจวันที่ (วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม)' :
+        w.mode === 'new' && (!w.name.trim() || !w.phone.trim()) ? 'กรุณากรอกชื่อและเบอร์โทรของลูกค้า' :
+        w.mode === 'existing' && !w.vendorId ? 'กรุณาเลือกผู้ขาย' :
+        !w.category ? 'กรุณาเลือกหมวดสินค้า' :
+        w.category === 'food' && !w.foodType ? 'กรุณาเลือกประเภทอาหาร' : '';
+      if (problem){ errEl.textContent = problem; return; }
+      var btn = this;
+      btn.disabled = true;
+      apiPost('/api/bookings/staff', {
+        stallId: w.stallId, vendorId: w.mode === 'existing' ? w.vendorId : null,
+        vendorName: w.name.trim(), vendorPhone: w.phone.trim(),
+        category: w.category, foodType: w.category === 'food' ? w.foodType : null,
+        startDate: w.start, endDate: w.end, note: w.note.trim() || null, paidCash: w.paid
+      }).then(function(b){
+        toast('จองล็อก ' + b.stall_code + ' ให้ ' + b.vendor_name + ' แล้ว');
+        state.walkin = newWalkin();
+        loadPublicData(); loadVendors(); loadAdminBookings();
+      }).catch(function(err){
+        errEl.textContent = (err && err.error) || 'จองไม่สำเร็จ กรุณาลองใหม่';
+        btn.disabled = false;
+      });
+    };
+  }
+
   function renderAllBookings(panel){
     var filter = state.bookingsFilter || 'all';
     var list = (state.bookings||[]).filter(function(b){ return filter==='all' || b.status===filter; });
@@ -1130,8 +1316,9 @@
 
     var rowsHtml = list.length ? list.map(function(b){
       var payStatus = b.payment_status || 'unpaid';
-      return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span></td>' +
-        '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'</td>' +
+      return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span>' +
+          (b.created_by ? '<br><span class="pill small">จองแทนโดย '+esc(b.created_by)+'</span>' : '') + '</td>' +
+        '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'<br><span class="muted small">'+esc(goodsLabel(b.category, b.food_type))+'</span></td>' +
         '<td>'+esc(b.zone_name||'')+'</td>' +
         '<td>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+'</td>' +
         '<td><span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span></td>' +

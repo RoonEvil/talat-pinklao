@@ -1,8 +1,11 @@
+const crypto = require('crypto');
 const express = require('express');
 const db = require('../db');
 const wrap = require('../wrap');
 const { imageUpload, saveImage } = require('../files');
 const { optionalAuth, requireAdmin } = require('../middleware/auth');
+const { CATEGORY_IDS, FOOD_TYPE_IDS, splitList, goodsLabel } = require('../goods');
+const { findNeighborClash } = require('../neighbors');
 
 const router = express.Router();
 router.param('id', wrap.numericIdParam);
@@ -27,6 +30,73 @@ async function hasOverlap(stallId, startDate, endDate, statuses, excludeId) {
     [stallId, ...statuses, excludeId || -1, startDate, endDate]
   );
   return row.c > 0;
+}
+
+// What this booking sells. Food bookings must name the kind of food.
+function readGoods(body) {
+  const category = body.category == null || body.category === '' ? 'other' : body.category;
+  if (!CATEGORY_IDS.includes(category)) return { error: 'ประเภทสินค้าไม่ถูกต้อง' };
+  if (category !== 'food') return { category, foodType: null };
+  if (!FOOD_TYPE_IDS.includes(body.foodType)) return { error: 'ขายอาหาร กรุณาเลือกประเภทอาหาร' };
+  return { category, foodType: body.foodType };
+}
+
+// A registered vendor books only for the goods they signed up to sell.
+function registeredGoodsError(vendor, goods) {
+  const categories = splitList(vendor && vendor.categories);
+  if (!categories.length) return null;
+  if (!categories.includes(goods.category)) return 'ประเภทสินค้านี้ไม่ตรงกับที่ผู้ขายลงทะเบียนไว้';
+  const foodTypes = splitList(vendor.food_types);
+  if (goods.foodType && foodTypes.length && !foodTypes.includes(goods.foodType)) {
+    return 'ประเภทอาหารนี้ไม่ตรงกับที่ผู้ขายลงทะเบียนไว้';
+  }
+  return null;
+}
+
+function clashMessage(clash) {
+  return `ล็อก ${clash.code} ที่อยู่ติดกันขาย${goodsLabel(clash.category, clash.food_type)}ในช่วงวันที่ทับกันอยู่แล้ว ` +
+    '— ตลาดไม่ให้ร้านที่ขายของเหมือนกันอยู่ติดกัน กรุณาเลือกล็อกอื่นหรือช่วงวันอื่น';
+}
+
+// The stall must be free on those dates, and no neighbouring stall may already sell the same thing then.
+async function placementError(stallId, startDate, endDate, goods) {
+  if (await hasOverlap(stallId, startDate, endDate, ['pending', 'approved'])) {
+    return 'ล็อกนี้มีคำขอหรือการจองที่ทับซ้อนกับช่วงวันที่นี้อยู่แล้ว';
+  }
+  const clash = await findNeighborClash({
+    stallId, startDate, endDate, category: goods.category, foodType: goods.foodType, statuses: ['pending', 'approved']
+  });
+  return clash ? clashMessage(clash) : null;
+}
+
+async function insertBooking({ stall, vendorToken, vendorName, vendorPhone, goods, startDate, endDate, note, isRegular, status, paymentStatus, paymentMethod, createdBy }) {
+  const rate = isRegular ? stall.regular_price_per_day : stall.price_per_day;
+  const row = await db.get(
+    `INSERT INTO bookings
+     (stall_id, zone_id, vendor_token, vendor_name, vendor_phone, category, food_type, start_date, end_date, note,
+      deposit_amount, rate_type, payment_method, payment_status, status, decided_at, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${status === 'approved' ? 'NOW()' : 'NULL'},?) RETURNING id`,
+    [
+      stall.id, stall.zone_id, vendorToken, vendorName, vendorPhone, goods.category, goods.foodType,
+      startDate, endDate, note || null, rate * countDays(startDate, endDate), isRegular ? 'regular' : 'guest',
+      paymentMethod, paymentStatus, status, createdBy || null
+    ]
+  );
+  return row.id;
+}
+
+async function recordVendor(vendor, vendorToken, vendorName, vendorPhone, category) {
+  if (vendor) {
+    await db.run('UPDATE vendors SET name=?, phone=?, category=?, last_booking_at=NOW() WHERE id=?', [
+      vendorName, vendorPhone, category, vendorToken
+    ]);
+  } else {
+    await db.run(
+      `INSERT INTO vendors (id, name, phone, category, active, is_regular, last_booking_at)
+       VALUES (?,?,?,?,1,0,NOW())`,
+      [vendorToken, vendorName, vendorPhone, category]
+    );
+  }
 }
 
 async function isRegisteredVendor(id) {
@@ -65,10 +135,12 @@ function bookingWithMeta(id) {
   );
 }
 
-// Public occupancy feed — just enough to render stall availability, no vendor details.
+// Public occupancy feed — stall availability and what each stall sells (to warn about identical
+// neighbours before booking), no vendor details.
 router.get('/active', wrap(async (req, res) => {
   res.json(await db.all(
-    `SELECT stall_id AS "stallId", start_date AS "startDate", end_date AS "endDate", status
+    `SELECT stall_id AS "stallId", start_date AS "startDate", end_date AS "endDate", status,
+       category, food_type AS "foodType"
      FROM bookings WHERE status IN ('pending','approved') AND end_date::date >= CURRENT_DATE`
   ));
 }));
@@ -129,7 +201,7 @@ router.get('/', requireAdmin, wrap(async (req, res) => {
 
 router.post('/', optionalAuth, wrap(async (req, res) => {
   const {
-    stallId, vendorName, vendorPhone, category,
+    stallId, vendorName, vendorPhone,
     startDate, endDate, note
   } = req.body || {};
   const isVendorLogin = req.user && req.user.kind === 'vendor';
@@ -145,6 +217,8 @@ router.post('/', optionalAuth, wrap(async (req, res) => {
     return res.status(403).json({ error: 'กรุณาเข้าสู่ระบบบัญชีนี้ก่อนจอง' });
   }
   if (endDate < startDate) return res.status(400).json({ error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม' });
+  const goods = readGoods(req.body);
+  if (goods.error) return res.status(400).json({ error: goods.error });
 
   const stall = await db.get('SELECT * FROM stalls WHERE id = ?', [stallId]);
   if (!stall || !stall.active) return res.status(404).json({ error: 'ล็อกนี้ไม่พร้อมให้จอง' });
@@ -153,46 +227,62 @@ router.post('/', optionalAuth, wrap(async (req, res) => {
   if (vendor && !vendor.active) {
     return res.status(403).json({ error: 'บัญชีผู้ขายของคุณถูกระงับโดยเจ้าหน้าที่ตลาด' });
   }
-  // A registered vendor books only for the kinds of goods they signed up to sell.
-  const registeredCategories = vendor && vendor.categories ? vendor.categories.split(',') : null;
-  if (isVendorLogin && registeredCategories && !registeredCategories.includes(category || 'other')) {
-    return res.status(400).json({ error: 'ประเภทสินค้านี้ไม่ตรงกับที่ลงทะเบียนไว้ในบัญชีของคุณ' });
-  }
+  const goodsError = isVendorLogin && registeredGoodsError(vendor, goods);
+  if (goodsError) return res.status(400).json({ error: goodsError });
 
-  if (await hasOverlap(stallId, startDate, endDate, ['pending', 'approved'])) {
-    return res.status(409).json({ error: 'ล็อกนี้มีคำขอหรือการจองที่ทับซ้อนกับช่วงวันที่นี้อยู่แล้ว' });
-  }
+  const placement = await placementError(stall.id, startDate, endDate, goods);
+  if (placement) return res.status(409).json({ error: placement });
 
-  const isRegular = !!(vendor && vendor.is_regular);
-  const rate = isRegular ? stall.regular_price_per_day : stall.price_per_day;
-  const depositAmount = rate * countDays(startDate, endDate);
+  const id = await insertBooking({
+    stall, vendorToken, vendorName, vendorPhone, goods, startDate, endDate, note,
+    isRegular: !!(vendor && vendor.is_regular),
+    // Payment is chosen and made after approval, so every new booking starts unpaid.
+    status: 'pending', paymentStatus: 'unpaid', paymentMethod: 'promptpay'
+  });
+  await recordVendor(vendor, vendorToken, vendorName, vendorPhone, goods.category);
+  res.status(201).json(await bookingWithMeta(id));
+}));
 
-  const created = await db.get(
-    `INSERT INTO bookings
-     (stall_id, zone_id, vendor_token, vendor_name, vendor_phone, category, start_date, end_date, note,
-      deposit_amount, rate_type, payment_method, payment_status, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending') RETURNING id`,
-    [
-      stallId, stall.zone_id, vendorToken, vendorName, vendorPhone, category || 'other',
-      startDate, endDate, note || null,
-      // Payment is chosen and made after approval, so every new booking starts unpaid.
-      depositAmount, isRegular ? 'regular' : 'guest', 'promptpay', 'unpaid'
-    ]
-  );
+// Staff book on a customer's behalf (e.g. someone who does not use the app). The booking is approved at once.
+router.post('/staff', requireAdmin, wrap(async (req, res) => {
+  const body = req.body || {};
+  const { stallId, vendorId, startDate, endDate, note } = body;
+  if (!wrap.isId(stallId)) return res.status(400).json({ error: 'กรุณาเลือกล็อก' });
+  if (!isIsoDate(startDate) || !isIsoDate(endDate)) return res.status(400).json({ error: 'รูปแบบวันที่ไม่ถูกต้อง' });
+  if (endDate < startDate) return res.status(400).json({ error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม' });
+  const goods = readGoods(body);
+  if (goods.error) return res.status(400).json({ error: goods.error });
 
-  if (vendor) {
-    await db.run('UPDATE vendors SET name=?, phone=?, category=?, last_booking_at=NOW() WHERE id=?', [
-      vendorName, vendorPhone, category || 'other', vendorToken
-    ]);
+  let vendor = null;
+  let vendorToken, vendorName, vendorPhone;
+  if (vendorId) {
+    vendor = await db.get('SELECT * FROM vendors WHERE id = ?', [String(vendorId)]);
+    if (!vendor) return res.status(404).json({ error: 'ไม่พบผู้ขายนี้' });
+    if (!vendor.active) return res.status(403).json({ error: 'ผู้ขายรายนี้ถูกระงับอยู่' });
+    [vendorToken, vendorName, vendorPhone] = [vendor.id, vendor.name, vendor.phone];
+    const goodsError = registeredGoodsError(vendor, goods);
+    if (goodsError) return res.status(400).json({ error: goodsError });
   } else {
-    await db.run(
-      `INSERT INTO vendors (id, name, phone, category, active, is_regular, last_booking_at)
-       VALUES (?,?,?,?,1,0,NOW())`,
-      [vendorToken, vendorName, vendorPhone, category || 'other']
-    );
+    vendorName = String(body.vendorName || '').trim();
+    vendorPhone = String(body.vendorPhone || '').trim();
+    if (!vendorName || !vendorPhone) return res.status(400).json({ error: 'กรุณากรอกชื่อและเบอร์โทรของลูกค้า' });
+    vendorToken = `walkin-${crypto.randomUUID()}`;
   }
 
-  res.status(201).json(await bookingWithMeta(created.id));
+  const stall = await db.get('SELECT * FROM stalls WHERE id = ?', [stallId]);
+  if (!stall || !stall.active) return res.status(404).json({ error: 'ล็อกนี้ไม่พร้อมให้จอง' });
+  const placement = await placementError(stall.id, startDate, endDate, goods);
+  if (placement) return res.status(409).json({ error: placement });
+
+  const paidCash = body.paidCash === true;
+  const id = await insertBooking({
+    stall, vendorToken, vendorName, vendorPhone, goods, startDate, endDate, note,
+    isRegular: !!(vendor && vendor.is_regular),
+    status: 'approved', paymentStatus: paidCash ? 'confirmed' : 'unpaid', paymentMethod: 'cash',
+    createdBy: req.admin.id
+  });
+  await recordVendor(vendor, vendorToken, vendorName, vendorPhone, goods.category);
+  res.status(201).json(await bookingWithMeta(id));
 }));
 
 router.put('/:id/status', requireAdmin, wrap(async (req, res) => {
@@ -204,6 +294,13 @@ router.put('/:id/status', requireAdmin, wrap(async (req, res) => {
   if (!booking) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
   if (status === 'approved' && (await hasOverlap(booking.stall_id, booking.start_date, booking.end_date, ['approved'], booking.id))) {
     return res.status(409).json({ error: 'ไม่สามารถอนุมัติได้ — ทับซ้อนกับการจองที่อนุมัติแล้ว' });
+  }
+  if (status === 'approved') {
+    const clash = await findNeighborClash({
+      stallId: booking.stall_id, startDate: booking.start_date, endDate: booking.end_date,
+      category: booking.category, foodType: booking.food_type, statuses: ['approved'], excludeId: booking.id
+    });
+    if (clash) return res.status(409).json({ error: 'ไม่สามารถอนุมัติได้ — ' + clashMessage(clash) });
   }
   await db.run('UPDATE bookings SET status=?, decided_at=NOW() WHERE id=?', [status, booking.id]);
   res.json(await bookingWithMeta(booking.id));
