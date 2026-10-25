@@ -153,6 +153,11 @@ router.post('/', optionalAuth, wrap(async (req, res) => {
   if (vendor && !vendor.active) {
     return res.status(403).json({ error: 'บัญชีผู้ขายของคุณถูกระงับโดยเจ้าหน้าที่ตลาด' });
   }
+  // A registered vendor books only for the kinds of goods they signed up to sell.
+  const registeredCategories = vendor && vendor.categories ? vendor.categories.split(',') : null;
+  if (isVendorLogin && registeredCategories && !registeredCategories.includes(category || 'other')) {
+    return res.status(400).json({ error: 'ประเภทสินค้านี้ไม่ตรงกับที่ลงทะเบียนไว้ในบัญชีของคุณ' });
+  }
 
   if (await hasOverlap(stallId, startDate, endDate, ['pending', 'approved'])) {
     return res.status(409).json({ error: 'ล็อกนี้มีคำขอหรือการจองที่ทับซ้อนกับช่วงวันที่นี้อยู่แล้ว' });
