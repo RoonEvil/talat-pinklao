@@ -536,3 +536,8 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px dashed var(--border); 
 @media (prefers-reduced-motion: reduce){
   *{ animation-duration:0.001ms !important; transition-duration:0.001ms !important; }
 }
+
+/* auto-filled booking form */
+.autofill-note{ margin:0 0 12px; padding:8px 12px; border-radius:8px; background:var(--primary-soft); color:var(--ink); font-size:.86rem; line-height:1.5; }
+.link-btn{ border:none; background:none; padding:0 0 0 6px; color:var(--primary); font:inherit; font-weight:600; text-decoration:underline; cursor:pointer; }
+.link-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
