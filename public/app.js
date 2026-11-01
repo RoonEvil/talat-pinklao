@@ -626,6 +626,16 @@
   }
 
   // ---------- Booking modal ----------
+  // What the vendor chose last time: saved in this browser after each booking, otherwise taken from their
+  // most recent booking in "my bookings" (so a member gets it on a new device too).
+  function lastBookingChoices(){
+    if (profile.lastBooking) return profile.lastBooking;
+    var latest = (state.myBookings || []).slice().sort(function(a, b){ return b.id - a.id; })[0];
+    if (!latest) return {};
+    return { category: latest.category, foodType: latest.food_type || null,
+      days: daysInclusive(latest.start_date, latest.end_date), note: latest.note || '' };
+  }
+
   function openBookingModal(stallId){
     var stall = state.stalls.find(function(s){ return String(s.id)===String(stallId); });
     if (!stall) return;
@@ -638,31 +648,38 @@
     // A registered account picks only from the goods it signed up to sell (the server checks this too).
     var allowedCats = isRegistered && profile.categories && profile.categories.length ? profile.categories : null;
     var catChoices = allowedCats ? CATEGORIES.filter(function(c){ return allowedCats.indexOf(c.id) !== -1; }) : CATEGORIES;
-    var myCategory = stall.category || 'other';
+    // Auto-fill from what this vendor did last time: remembered in this browser, or their latest booking.
+    var prev = lastBookingChoices();
+    var myCategory = (prev.category && catChoices.some(function(c){ return c.id === prev.category; })) ? prev.category : (stall.category || 'other');
     if (allowedCats && allowedCats.indexOf(myCategory) === -1) myCategory = catChoices[0].id;
+    var autoFilled = !!(prev.category || prev.days || prev.note) || !!(profile.vendorName || profile.vendorPhone);
+    var endDefault = prev.days > 1 ? addDaysIso(minDate, prev.days - 1) : minDate;
 
     var catOptions = catChoices.map(function(c){
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
     var allowedFoods = isRegistered && profile.foodTypes && profile.foodTypes.length ? profile.foodTypes : null;
     var foodChoices = allowedFoods ? FOOD_TYPES.filter(function(f){ return allowedFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES;
-    var foodOptions = foodOptionsHtml(foodChoices, foodChoices.length === 1 ? foodChoices[0].id : '', foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
+    var foodPick = foodChoices.length === 1 ? foodChoices[0].id :
+      (prev.foodType && foodChoices.some(function(f){ return f.id === prev.foodType; }) ? prev.foodType : '');
+    var foodOptions = foodOptionsHtml(foodChoices, foodPick, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
       '<h3>จองล็อก '+esc(stall.code)+'</h3>' +
       '<div class="sub">'+esc(zone?zone.name:'')+' · ราคาทั่วไป '+fmtMoney(stall.price_per_day)+'/วัน · ราคาสมาชิก '+fmtMoney(regularRate)+'/วัน</div>' +
-      '<form id="bookForm">' +
-        '<div class="field"><label for="bfName">ชื่อผู้ขาย</label><input id="bfName" required value="'+esc(profile.vendorName)+'"></div>' +
-        '<div class="field"><label for="bfPhone">เบอร์โทรศัพท์</label><input id="bfPhone" required value="'+esc(profile.vendorPhone)+'" placeholder="08X-XXX-XXXX"></div>' +
+      (autoFilled ? '<p class="autofill-note" id="bfAutoNote">✨ กรอกข้อมูลจากการจองครั้งก่อนให้แล้ว ตรวจสอบแล้วกดส่งคำขอได้เลย <button type="button" class="link-btn" id="bfClearAuto">ล้างข้อมูล</button></p>' : '') +
+      '<form id="bookForm" autocomplete="on">' +
+        '<div class="field"><label for="bfName">ชื่อผู้ขาย</label><input id="bfName" name="name" autocomplete="name" required value="'+esc(profile.vendorName)+'"></div>' +
+        '<div class="field"><label for="bfPhone">เบอร์โทรศัพท์</label><input id="bfPhone" name="tel" type="tel" inputmode="tel" autocomplete="tel" required value="'+esc(profile.vendorPhone)+'" placeholder="08X-XXX-XXXX"></div>' +
         '<div class="field"><label for="bfCat">คุณขายอะไร?</label><select id="bfCat">'+catOptions+'</select></div>' +
         '<div class="field" id="bfFoodWrap" hidden><label for="bfFood">ประเภทอาหาร</label><select id="bfFood">'+foodOptions+'</select></div>' +
         '<div class="field-row">' +
           '<div class="field"><label for="bfStart">วันที่เริ่ม</label><input type="date" id="bfStart" required min="'+minDate+'" value="'+minDate+'"></div>' +
-          '<div class="field"><label for="bfEnd">วันที่สิ้นสุด</label><input type="date" id="bfEnd" required min="'+minDate+'" value="'+minDate+'"></div>' +
+          '<div class="field"><label for="bfEnd">วันที่สิ้นสุด</label><input type="date" id="bfEnd" required min="'+minDate+'" value="'+endDefault+'"></div>' +
         '</div>' +
         '<div class="clash-note" id="bfClash" role="alert" hidden></div>' +
-        '<div class="field"><label for="bfNote">ข้อความถึงเจ้าหน้าที่ตลาด (ถ้ามี)</label><textarea id="bfNote" rows="2" placeholder="เช่น ขายลูกชิ้นปิ้ง ต้องการปลั๊กไฟ"></textarea></div>' +
+        '<div class="field"><label for="bfNote">ข้อความถึงเจ้าหน้าที่ตลาด (ถ้ามี)</label><textarea id="bfNote" rows="2" placeholder="เช่น ขายลูกชิ้นปิ้ง ต้องการปลั๊กไฟ">'+esc(prev.note || '')+'</textarea></div>' +
         '<p class="deposit-note">ยังไม่ต้องจ่ายเงินตอนนี้ — เมื่อเจ้าหน้าที่อนุมัติแล้ว ปุ่ม "ชำระเงิน" จะขึ้นในหน้า "การจองของฉัน" '+(isRegistered?'':'สมาชิกที่ลงทะเบียน/ลูกค้าประจำจะได้ราคาพิเศษโดยอัตโนมัติ')+'</p>' +
         '<div class="form-error" id="bfErr"></div>' +
         '<div class="form-actions">' +
@@ -688,6 +705,28 @@
       submitBtn.disabled = !!clash;
     };
     [catSel, foodSel, startEl, endEl].forEach(function(el){ el.addEventListener('change', syncGoods); });
+    // Moving the start date keeps the same number of days; the end date never falls before the start.
+    var lastStart = startEl.value;
+    startEl.addEventListener('change', function(){
+      if (lastStart && endEl.value >= lastStart && startEl.value){
+        endEl.value = addDaysIso(startEl.value, daysInclusive(lastStart, endEl.value) - 1);
+      } else if (endEl.value < startEl.value){
+        endEl.value = startEl.value;
+      }
+      endEl.min = startEl.value || minDate;
+      lastStart = startEl.value;
+      syncGoods();
+    });
+    var clearBtn = document.getElementById('bfClearAuto');
+    if (clearBtn) clearBtn.onclick = function(){
+      if (!isRegistered){ document.getElementById('bfName').value = ''; document.getElementById('bfPhone').value = ''; }
+      catSel.value = catChoices.some(function(c){ return c.id === (stall.category || 'other'); }) ? (stall.category || 'other') : catChoices[0].id;
+      foodSel.value = foodChoices.length === 1 ? foodChoices[0].id : '';
+      startEl.value = minDate; endEl.value = minDate; lastStart = minDate;
+      document.getElementById('bfNote').value = '';
+      document.getElementById('bfAutoNote').hidden = true;
+      syncGoods();
+    };
     syncGoods();
     document.getElementById('bookForm').addEventListener('submit', function(e){
       e.preventDefault();
@@ -703,7 +742,9 @@
       if (end < start){ errEl.textContent = 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม'; return; }
       if (category === 'food' && !foodType){ errEl.textContent = 'กรุณาเลือกประเภทอาหาร'; return; }
 
-      profile.vendorName = name; profile.vendorPhone = phone; saveProfile();
+      profile.vendorName = name; profile.vendorPhone = phone;
+      profile.lastBooking = { category: category, foodType: foodType, days: daysInclusive(start, end), note: note };
+      saveProfile();
       submitBtn.disabled = true;
 
       apiPost('/api/bookings', {
