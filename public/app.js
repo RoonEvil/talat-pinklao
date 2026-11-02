@@ -533,8 +533,9 @@
       '<div class="section-head"><h2>ผังตลาด</h2><span class="muted small">แตะที่ล็อกบนแผนผังเพื่อขอจอง</span></div>' +
       '<div class="card isomap-card">' +
         '<div class="isomap-toolbar">' + zoneButtons +
-          '<input type="search" class="map-search" id="mapSearch" placeholder="ค้นหารหัสล็อก เช่น F3" aria-label="ค้นหารหัสล็อก">' +
+          '<input type="search" class="map-search" id="mapSearch" value="'+esc(state.mapQuery || '')+'" placeholder="ค้นหาล็อก เช่น F3, อาหาร, เครื่องดื่ม, เสื้อผ้า" aria-label="ค้นหารหัสล็อกหรือประเภทสินค้า">' +
         '</div>' +
+        mapGoodsResultHtml() +
         '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
         '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
         zoneRulesHtml() +
@@ -608,21 +609,24 @@
         var s = stallById(it.stallId);
         var st = stallStatus(s);
         var z = zoneById(s.zone_id);
+        var hl = state.mapHighlight;
+        var hit = !!hl && hl.indexOf(String(s.id)) !== -1;
         return {
           color: STALL_STATUS_COLORS[st],
           zone: zoneColor(z),
           label: s.code,
           title: s.code + ' · ' + (z ? z.name + ' · ' : '') + STALL_STATUS_LABELS[st] + ' · ' + fmtMoney(s.price_per_day) + '/วัน',
           clickable: st !== 'inactive',
-          cls: st === 'inactive' ? 'is-disabled' : '',
-          highlight: String(state.mapHighlight) === String(s.id)
+          // While a search is active, everything that did not match fades back.
+          cls: (st === 'inactive' ? 'is-disabled' : '') + (hl && !hit ? ' is-dim' : ''),
+          highlight: hit
         };
       },
       onItemClick: function(idx){
         var it = layout.items[idx];
         if (it.kind !== 'stall') return;
         var s = stallById(it.stallId);
-        if (s && stallStatus(s) !== 'inactive') openBookingModal(s.id);
+        if (s && stallStatus(s) !== 'inactive') openBookingModal(s.id, state.mapGoods);
       },
       onInteract: function(on){ state.mapInteracting = on; }
     });
@@ -639,19 +643,112 @@
       });
     });
 
-    document.getElementById('mapSearch').addEventListener('keydown', function(e){
+    var idxOf = function(id){
+      return layout.items.findIndex(function(it){ return it.kind === 'stall' && String(it.stallId) === String(id); });
+    };
+    var search = document.getElementById('mapSearch');
+    search.addEventListener('keydown', function(e){
       if (e.key !== 'Enter') return;
-      var q = this.value.trim().toLowerCase();
-      if (!q){ state.mapHighlight = null; ctrl.draw(); return; }
+      var raw = this.value.trim(), q = raw.toLowerCase();
+      state.mapQuery = raw;
+      if (!q){ clearMapSearch(); return; }
       var s = state.stalls.find(function(x){ return x.code.toLowerCase() === q; }) ||
               state.stalls.find(function(x){ return x.code.toLowerCase().indexOf(q) === 0; });
-      if (!s){ toast('ไม่พบล็อก "' + this.value.trim() + '"', true); return; }
-      var idx = layout.items.findIndex(function(it){ return it.kind === 'stall' && String(it.stallId) === String(s.id); });
-      if (idx < 0){ toast('ล็อก ' + s.code + ' ยังไม่ได้วางบนแผนผัง', true); return; }
-      state.mapHighlight = s.id;
-      ctrl.draw();
-      ctrl.focusItems([idx]);
+      if (s){
+        var idx = idxOf(s.id);
+        if (idx < 0){ toast('ล็อก ' + s.code + ' ยังไม่ได้วางบนแผนผัง', true); return; }
+        state.mapGoods = null;
+        state.mapHighlight = [String(s.id)];
+        state.mapFocusPending = true;
+        renderMap();
+        return;
+      }
+      // Not a stall code: maybe goods ("อาหาร", "เครื่องดื่ม", "เสื้อผ้า", "ของใช้" ...).
+      var goods = goodsFromQuery(q);
+      if (!goods){ toast('ไม่พบล็อกหรือหมวดสินค้า "' + raw + '"', true); return; }
+      state.mapGoods = goods;
+      state.mapHighlight = freeStallsForGoods(goods).map(function(x){ return String(x.id); });
+      state.mapFocusPending = true;
+      renderMap();
     });
+    search.addEventListener('search', function(){ if (!this.value.trim()) clearMapSearch(); });
+
+    // After a search, zoom to what was found (once; later re-renders keep the user's view).
+    if (state.mapFocusPending && state.mapHighlight && state.mapHighlight.length){
+      state.mapFocusPending = false;
+      var found = state.mapHighlight.map(idxOf).filter(function(i){ return i >= 0; });
+      if (found.length) ctrl.focusItems(found);
+    }
+    host.querySelectorAll('[data-goodsstall]').forEach(function(btn){
+      btn.addEventListener('click', function(){ openBookingModal(btn.dataset.goodsstall, state.mapGoods); });
+    });
+    var clr = document.getElementById('mapSearchClear');
+    if (clr) clr.onclick = clearMapSearch;
+  }
+
+  function clearMapSearch(){
+    state.mapQuery = ''; state.mapGoods = null; state.mapHighlight = null;
+    renderMap();
+  }
+
+  // Words people type when looking for a kind of stall. The longest matching word wins,
+  // so "อาหารสด" finds fresh food rather than all food.
+  var GOODS_WORDS = [
+    { words:['อาหาร','ของกิน','กิน','food'], goods:{ category:'food' } },
+    { words:['เครื่องดื่ม','น้ำ','ดื่ม','กาแฟ','ชา','drink'], goods:{ category:'food', foodType:'drink' } },
+    { words:['ข้าวแกง','อาหารปรุงสำเร็จ','กับข้าว'], goods:{ category:'food', foodType:'ready_meal' } },
+    { words:['ตามสั่ง','ก๋วยเตี๋ยว','อาหารตามสั่ง'], goods:{ category:'food', foodType:'made_to_order' } },
+    { words:['ปิ้งย่าง','ของทอด','ทอด','ย่าง'], goods:{ category:'food', foodType:'grill_fried' } },
+    { words:['ขนม','ขนมไทย','ของหวาน','หวาน'], goods:{ category:'food', foodType:'dessert' } },
+    { words:['เบเกอรี่','ขนมปัง','เค้ก'], goods:{ category:'food', foodType:'bakery' } },
+    { words:['ผลไม้'], goods:{ category:'food', foodType:'fruit' } },
+    { words:['อาหารสด','ผัก','เนื้อ','ปลา','หมู','ไก่'], goods:{ category:'food', foodType:'fresh' } },
+    { words:['เสื้อผ้า','เสื้อ','กางเกง','เครื่องประดับ','แฟชั่น','รองเท้า','กระเป๋า'], goods:{ category:'clothing' } },
+    { words:['สินค้าทั่วไป','ทั่วไป','ของใช้','ของใช้ในบ้าน'], goods:{ category:'general' } },
+    { words:['บริการ'], goods:{ category:'service' } },
+    { words:['อื่นๆ','อื่น'], goods:{ category:'other' } }
+  ];
+  function goodsFromQuery(q){
+    var best = null, bestLen = 0;
+    GOODS_WORDS.forEach(function(g){
+      g.words.forEach(function(w){
+        if (q.indexOf(w) !== -1 && w.length > bestLen){ best = g.goods; bestLen = w.length; }
+      });
+    });
+    if (!best) return null;
+    var label = best.category === 'food' && best.foodType ? foodTypeLabel(best.foodType) : categoryMeta(best.category).label;
+    return { category: best.category, foodType: best.foodType || null, label: label };
+  }
+  function freeStallsForGoods(goods){
+    return state.stalls.filter(function(s){
+      if (stallStatus(s) !== 'available') return false;
+      var z = zoneById(s.zone_id);
+      if (!zoneAllowsCategory(z, goods.category)) return false;
+      return !goods.foodType || zoneAllowsFood(z, goods.foodType);
+    }).sort(function(a, b){
+      var za = state.zones.findIndex(function(z){ return String(z.id) === String(a.zone_id); });
+      var zb = state.zones.findIndex(function(z){ return String(z.id) === String(b.zone_id); });
+      return za - zb || byRowCol(a, b);
+    });
+  }
+  // Result box under the map toolbar after searching for goods.
+  function mapGoodsResultHtml(){
+    var g = state.mapGoods;
+    if (!g) return '';
+    var list = freeStallsForGoods(g);
+    var zoneNames = [];
+    list.forEach(function(s){ var z = zoneById(s.zone_id); if (z && zoneNames.indexOf(z.name) === -1) zoneNames.push(z.name); });
+    var head = list.length
+      ? 'ล็อกว่างสำหรับ <b>'+esc(g.label)+'</b> '+list.length+' ล็อก · '+esc(zoneNames.join(', '))+' <span class="muted">— แตะรหัสล็อกเพื่อจอง</span>'
+      : 'ตอนนี้ไม่มีล็อกว่างที่รับ <b>'+esc(g.label)+'</b>';
+    return '<div class="map-goods-result" role="status">' +
+      '<div class="map-goods-head"><span>'+head+'</span><button type="button" class="link-btn" id="mapSearchClear">ล้างการค้นหา</button></div>' +
+      (list.length ? '<div class="map-goods-list">' + list.map(function(s){
+        var z = zoneById(s.zone_id);
+        return '<button type="button" class="goods-stall" style="--zc:'+zoneColor(z)+'" data-goodsstall="'+s.id+'">'+esc(s.code)+
+          '<span>'+fmtMoney(s.price_per_day)+'</span></button>';
+      }).join('') + '</div>' : '') +
+    '</div>';
   }
 
   // ---------- Booking modal ----------
@@ -665,7 +762,7 @@
       days: daysInclusive(latest.start_date, latest.end_date), note: latest.note || '' };
   }
 
-  function openBookingModal(stallId){
+  function openBookingModal(stallId, goodsHint){
     var stall = state.stalls.find(function(s){ return String(s.id)===String(stallId); });
     if (!stall) return;
 
@@ -698,7 +795,10 @@
     // Auto-fill from what this vendor did last time: remembered in this browser, or their latest booking.
     var prev = lastBookingChoices();
     var inChoices = function(id){ return catChoices.some(function(c){ return c.id === id; }); };
-    var myCategory = prev.category && inChoices(prev.category) ? prev.category :
+    // Goods the vendor searched for on the map come first.
+    var hint = goodsHint || {};
+    var myCategory = hint.category && inChoices(hint.category) ? hint.category :
+      prev.category && inChoices(prev.category) ? prev.category :
       (inChoices(stall.category || 'other') ? (stall.category || 'other') : catChoices[0].id);
     var autoFilled = !!(prev.category || prev.days || prev.note) || !!(profile.vendorName || profile.vendorPhone);
     var endDefault = prev.days > 1 ? addDaysIso(minDate, prev.days - 1) : minDate;
@@ -707,6 +807,7 @@
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
     var foodPick = foodChoices.length === 1 ? foodChoices[0].id :
+      hint.foodType && foodChoices.some(function(f){ return f.id === hint.foodType; }) ? hint.foodType :
       (prev.foodType && foodChoices.some(function(f){ return f.id === prev.foodType; }) ? prev.foodType : '');
     var foodOptions = foodOptionsHtml(foodChoices, foodPick, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
 
