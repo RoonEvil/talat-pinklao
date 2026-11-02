@@ -114,7 +114,7 @@
         (st.title ? ' aria-label="' + esc(st.title) + '"' : '');
       var color = st.color || TINTS[it.kind] || 'var(--zone-2)';
       var center = P(it.x + it.w / 2, it.y + it.h / 2);
-      var s = '<g class="' + cls + '"' + attrs + ' style="--c:' + color + '">' + (st.title ? '<title>' + esc(st.title) + '</title>' : '');
+      var s = '<g class="' + cls + '"' + attrs + ' style="--c:' + color + (st.zone ? ';--z:' + st.zone : '') + '">' + (st.title ? '<title>' + esc(st.title) + '</title>' : '');
       if (isFlat(it)) s += poly('iso-pad', shrink(corners(it), center, 0.86));
       if (it.kind === 'stall') s += tent(it, st.label != null ? st.label : '');
       else if (it.kind === 'stage') s += box(it, 5, it.label || 'เวที');
@@ -138,6 +138,14 @@
       var i, a, b;
       for (i = 1; i < cols; i++){ a = P(i, 0); b = P(i, rows); out.push('<line class="' + gridCls + '" x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '"/>'); }
       for (i = 1; i < rows; i++){ a = P(0, i); b = P(cols, i); out.push('<line class="' + gridCls + '" x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '"/>'); }
+      // Coloured ground under each zone (public view), drawn below everything standing on it.
+      var areaLabels = [];
+      (opts.areas || []).forEach(function(ar){
+        out.push('<g class="iso-zone" style="--c:' + ar.color + '">' +
+          poly('iso-zone-area', [P(ar.x, ar.y), P(ar.x + ar.w, ar.y), P(ar.x + ar.w, ar.y + ar.h), P(ar.x, ar.y + ar.h)]) + '</g>');
+        if (ar.label) areaLabels.push('<g class="iso-item iso-text is-zone-sign" style="--c:' + ar.color + '">' +
+          signboard({ x: ar.x, y: ar.y, w: 1, h: 1, label: ar.label }) + '</g>');
+      });
       var order = layout.items.map(function(_, idx){ return idx; });
       order.sort(function(ia, ib){
         var A = layout.items[ia], B = layout.items[ib];
@@ -146,7 +154,7 @@
         return (A.x + A.y + A.w + A.h) - (B.x + B.y + B.w + B.h) || A.x - B.x;
       });
       order.forEach(function(idx){ out.push(drawItem(layout.items[idx], idx)); });
-      g.innerHTML = out.join('');
+      g.innerHTML = out.concat(areaLabels).join('');
     }
 
     function apply(){ g.setAttribute('transform', 'translate(' + view.tx.toFixed(1) + ',' + view.ty.toFixed(1) + ') scale(' + view.s.toFixed(4) + ')'); }
