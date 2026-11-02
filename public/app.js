@@ -474,57 +474,6 @@
       '<span><span class="dot" style="background:var(--muted)"></span>ปิด</span>' +
       '</div>';
 
-    var AISLE_ICONS = ['🌿','🌳','🪴'];
-    var zonesHtml = state.zones.map(function(z){
-      var color = ZONE_COLORS[(z.color_index||0)%4];
-      var stalls = stallsInZone(z.id);
-      var availableCount = stalls.filter(function(s){ return stallStatus(s)==='available'; }).length;
-
-      var byRow = {};
-      stalls.forEach(function(s){
-        var r = s.pos_row || 0;
-        (byRow[r] = byRow[r] || []).push(s);
-      });
-      var rowKeys = Object.keys(byRow).sort(function(a,b){ return a-b; });
-
-      function tileHtml(s){
-        var status = stallStatus(s);
-        var label = STALL_STATUS_LABELS[status];
-        var extra = '';
-        if (status==='occupied' || status==='pending'){
-          var next = activeBookingsForStall(s.id)[0];
-          if (next) extra = ' ถึง ' + fmtDate(next.endDate);
-        }
-        return '<button type="button" class="stall '+status+'" data-stall="'+s.id+'" '+(status==='inactive'?'disabled':'')+'>' +
-          '<span class="code">'+categoryMeta(s.category).icon+' '+esc(s.code)+'</span>' +
-          '<span class="price">'+fmtMoney(s.price_per_day)+'/วัน</span>' +
-          '<span class="status">'+label+extra+'</span>' +
-          '</button>';
-      }
-
-      var rowsHtml = rowKeys.map(function(rk, ri){
-        var rowStalls = byRow[rk].slice().sort(function(a,b){ return (a.pos_col||0)-(b.pos_col||0); });
-        var offset = ri * 22;
-        var tiles = rowStalls.map(tileHtml).join('');
-        var deco = '';
-        if (ri < rowKeys.length - 1){
-          var icons = '<span>'+AISLE_ICONS[ri % AISLE_ICONS.length]+'</span><span>'+AISLE_ICONS[(ri+1) % AISLE_ICONS.length]+'</span>';
-          deco = '<div class="aisle-deco" style="margin-left:'+(offset+11)+'px" aria-hidden="true">'+icons+'</div>';
-        }
-        return '<div class="stall-row" style="margin-left:'+offset+'px">'+tiles+'</div>' + deco;
-      }).join('');
-
-      return '<div class="zone">' +
-        '<div class="zone-head" style="--zc:'+color+'">' +
-        '<h3>'+esc(z.name)+'</h3>' +
-        '<p>'+esc(z.description||'')+'</p>' +
-        (zoneAllowed(z).length ? '<div class="zone-rule">รับเฉพาะ: <b>'+esc(zoneAllowedLabel(z))+'</b></div>' : '') +
-        '<div class="zone-stat">ว่าง '+availableCount+' จาก '+stalls.length+' ล็อก</div>' +
-        '</div>' +
-        '<div class="stall-grid">'+(rowsHtml||'<div class="empty small">ยังไม่มีล็อก</div>')+'</div>' +
-        '</div>';
-    }).join('');
-
     var zoneButtons = state.zones.map(function(z){
       return '<button type="button" class="btn small ghost" data-mapzone="'+z.id+'"><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>'+esc(z.name)+'</button>';
     }).join('');
@@ -542,13 +491,8 @@
         '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
         zoneRulesHtml() +
       '</div>' +
-      legend +
-      '<div class="section-head"><h2 style="font-size:1rem">รายการล็อกแยกตามโซน</h2></div>' +
-      '<div class="zones">'+(zonesHtml || '<div class="empty">ยังไม่มีการตั้งค่าโซน</div>')+'</div>';
+      legend;
 
-    host.querySelectorAll('.stall:not([disabled])').forEach(function(btn){
-      btn.addEventListener('click', function(){ openBookingModal(btn.dataset.stall); });
-    });
     var newsList = host.querySelector('.news-list');
     if (newsList) newsList.scrollLeft = newsScroll;
     host.querySelectorAll('[data-news]').forEach(function(btn){
