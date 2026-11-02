@@ -154,11 +154,19 @@ const SCHEMA = [
     method VARCHAR(10) NOT NULL CHECK (method IN ('promptpay','transfer','cash')),
     amount NUMERIC(10,2) NOT NULL DEFAULT 0,
     slip_picture_id INTEGER REFERENCES pictures(picture_id) ON DELETE SET NULL,
+    slip_ref VARCHAR(50),
+    slip_bank VARCHAR(3),
+    slip_check VARCHAR(10) CHECK (slip_check IN ('ok','not_slip','no_qr','duplicate')),
     status VARCHAR(10) NOT NULL CHECK (status IN ('paid','confirmed')),
     paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     confirmed_by INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
     confirmed_at TIMESTAMPTZ
   )`,
+  // e-Slip (level 1): the transaction reference read from the slip's QR code. One slip pays one booking.
+  'ALTER TABLE payments ADD COLUMN IF NOT EXISTS slip_ref VARCHAR(50)',
+  'ALTER TABLE payments ADD COLUMN IF NOT EXISTS slip_bank VARCHAR(3)',
+  `ALTER TABLE payments ADD COLUMN IF NOT EXISTS slip_check VARCHAR(10) CHECK (slip_check IN ('ok','not_slip','no_qr','duplicate'))`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS payments_slip_ref_key ON payments (slip_ref) WHERE slip_ref IS NOT NULL',
   `CREATE TABLE IF NOT EXISTS inspections (
     inspection_id SERIAL PRIMARY KEY,
     booking_id INTEGER NOT NULL REFERENCES bookings(booking_id) ON DELETE CASCADE,
@@ -193,7 +201,7 @@ db.TABLES = [
   { name: 'market_layouts', pk: 'layout_id', cols: ['layout_id', 'layout_data', 'updated_by', 'updated_at'] },
   { name: 'pictures', pk: 'picture_id', binary: true, cols: ['picture_id', 'picture_type', 'mime_type', 'uploaded_by', 'created_at'] },
   { name: 'bookings', pk: 'booking_id', cols: ['booking_id', 'stall_id', 'vendor_id', 'category_id', 'start_date', 'end_date', 'rate_type', 'total_amount', 'note', 'status', 'created_by', 'approved_by', 'created_at', 'decided_at'] },
-  { name: 'payments', pk: 'payment_id', cols: ['payment_id', 'booking_id', 'method', 'amount', 'slip_picture_id', 'status', 'paid_at', 'confirmed_by', 'confirmed_at'] },
+  { name: 'payments', pk: 'payment_id', cols: ['payment_id', 'booking_id', 'method', 'amount', 'slip_picture_id', 'slip_ref', 'slip_bank', 'slip_check', 'status', 'paid_at', 'confirmed_by', 'confirmed_at'] },
   { name: 'inspections', pk: 'inspection_id', cols: ['inspection_id', 'booking_id', 'inspect_date', 'present', 'category_match', 'fine_amount', 'fine_reason', 'inspected_by', 'recorded_at'] },
   { name: 'announcements', pk: 'announcement_id', cols: ['announcement_id', 'title', 'type', 'body', 'pinned', 'created_by', 'created_at'] }
 ];
