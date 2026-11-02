@@ -1,99 +1,105 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const db = require('../db');
 const wrap = require('../wrap');
-const { JWT_SECRET } = require('../middleware/auth');
-const { CATEGORY_IDS, FOOD_TYPE_IDS, splitList } = require('../goods');
+const { signUser, optionalAuth } = require('../middleware/auth');
+const { loadCategories, readGoods } = require('../goods');
+const U = require('../users');
 
 const router = express.Router();
 
-function sanitizeUsername(u) {
-  return String(u || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+// What the browser keeps about the signed-in user, including which staff menus the role may open.
+async function sessionUser(id) {
+  const u = await U.getUser(id);
+  if (!u) return null;
+  const out = U.publicUser(u, await loadCategories());
+  if (u.role_id !== db.ROLE.VENDOR) {
+    const role = await db.get('SELECT menu_access FROM roles WHERE role_id = ?', [u.role_id]);
+    out.menus = u.role_id === db.ROLE.ADMIN ? db.MENUS.slice() : String(role.menu_access || '').split(',').filter(Boolean);
+  }
+  return out;
 }
 
-// Known ids only, without duplicates, in a fixed order.
-function pickKnown(value, allowed) {
-  const list = Array.isArray(value) ? value : [];
-  return allowed.filter((id) => list.includes(id));
-}
-
-function vendorUser(v) {
-  return { kind: 'vendor', id: v.id, name: v.name, phone: v.phone, categories: splitList(v.categories), foodTypes: splitList(v.food_types) };
-}
-
-// Register a new vendor account (self-serve).
+// 1.1 สมัครสมาชิกผู้ค้า: profile, one category of goods, and PDPA consent.
 router.post('/register', wrap(async (req, res) => {
-  const { name, phone, username: rawUsername, password } = req.body || {};
-  const username = sanitizeUsername(rawUsername);
-  if (!name || !phone || !username || !password) {
-    return res.status(400).json({ error: 'กรุณากรอกชื่อ เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ' });
+  const body = req.body || {};
+  const p = U.readProfile(body);
+  const username = U.sanitizeUsername(body.username);
+  const password = String(body.password || '');
+  if (!p.firstName || !p.lastName || !p.phone || !username || !password) {
+    return res.status(400).json({ error: 'กรุณากรอกชื่อ นามสกุล เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ' });
   }
-  if (password.length < 4) {
-    return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
+  const phoneProblem = U.phoneError(p.phone);
+  if (phoneProblem) return res.status(400).json({ error: phoneProblem });
+  if (password.length < 4) return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
+  if (body.consent !== true) {
+    return res.status(400).json({ error: 'กรุณายินยอมให้เก็บและใช้ข้อมูลส่วนบุคคลก่อนสมัครสมาชิก' });
   }
-  // Each account sells exactly one category of goods.
-  const category = CATEGORY_IDS.includes(req.body.category) ? req.body.category : null;
-  if (!category) {
-    return res.status(400).json({ error: 'กรุณาเลือกหมวดสินค้าที่จะขาย 1 หมวด' });
-  }
-  const foodTypes = category === 'food' ? pickKnown(req.body.foodTypes, FOOD_TYPE_IDS) : [];
-  if (category === 'food' && !foodTypes.length) {
-    return res.status(400).json({ error: 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง' });
-  }
-  const adminClash = await db.get('SELECT username FROM admins WHERE username = ?', [username]);
-  const vendorClash = await db.get('SELECT id FROM vendors WHERE id = ?', [username]);
-  if (adminClash || vendorClash) {
-    return res.status(409).json({ error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว' });
-  }
-  const hash = bcrypt.hashSync(password, 10);
-  const vendor = await db.get(
-    `INSERT INTO vendors (id, name, phone, category, password_hash, active, is_regular, categories, food_types)
-     VALUES (?,?,?,?,?,1,0,?,?) RETURNING id, name, phone, categories, food_types`,
-    [username, name, phone, category, hash, category, foodTypes.length ? foodTypes.join(',') : null]
-  );
+  const goods = readGoods(await loadCategories(), body);
+  if (goods.error) return res.status(400).json({ error: goods.error });
+  if (await U.usernameTaken(username)) return res.status(409).json({ error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว' });
+  if (await U.phoneTaken(p.phone)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้สมัครสมาชิกไปแล้ว' });
 
-  const token = jwt.sign({ kind: 'vendor', id: username, name, phone }, JWT_SECRET, { expiresIn: '30d' });
-  res.status(201).json({ token, user: vendorUser(vendor) });
+  const row = await db.get(
+    `INSERT INTO users (role_id, username, password_hash, first_name, last_name, phone, address, line_id, category_id, consent_at)
+     VALUES (3,?,?,?,?,?,?,?,?,NOW()) RETURNING user_id, role_id`,
+    [username, bcrypt.hashSync(password, 10), p.firstName, p.lastName, p.phone, p.address || null, p.lineId || null, goods.categoryId]
+  );
+  res.status(201).json({ token: signUser(row), user: await sessionUser(row.user_id) });
 }));
 
-// Login: checks admin accounts first, then vendor accounts.
+// 1.2 เข้าสู่ระบบและตรวจสอบสิทธิ์ — one login for every role.
 router.post('/login', wrap(async (req, res) => {
-  const { username: rawUsername, password } = req.body || {};
-  const username = sanitizeUsername(rawUsername);
-  if (!username || !password) {
-    return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
+  const username = U.sanitizeUsername((req.body || {}).username);
+  const password = String((req.body || {}).password || '');
+  if (!username || !password) return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
+  const u = await db.get('SELECT user_id, role_id, password_hash, active FROM users WHERE username = ?', [username]);
+  const hash = u && u.password_hash && !u.password_hash.startsWith('tok:') ? u.password_hash : null;
+  if (!hash || !bcrypt.compareSync(password, hash)) {
+    return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
   }
+  if (!u.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
+  res.json({ token: signUser(u), user: await sessionUser(u.user_id) });
+}));
 
-  const admin = await db.get('SELECT * FROM admins WHERE username = ?', [username]);
-  if (admin) {
-    if (!admin.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
-    if (!bcrypt.compareSync(password, admin.password_hash)) {
-      return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
+function requireSignedIn(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อน' });
+  next();
+}
+
+router.get('/me', optionalAuth, requireSignedIn, wrap(async (req, res) => {
+  const user = await sessionUser(req.user.uid);
+  if (!user || !user.active) return res.status(401).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
+  res.json(user);
+}));
+
+// 1.3 ผู้ใช้แก้ไขข้อมูลส่วนตัวของตนเอง (ชื่อ เบอร์ ที่อยู่ Line ID และรหัสผ่าน).
+router.put('/me', optionalAuth, requireSignedIn, wrap(async (req, res) => {
+  const me = await U.getUser(req.user.uid);
+  if (!me || !me.active) return res.status(401).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
+  const body = req.body || {};
+  const p = U.readProfile(body);
+  if (p.firstName === '' || p.lastName === '') return res.status(400).json({ error: 'กรุณากรอกชื่อและนามสกุล' });
+  if (p.phone !== undefined) {
+    const phoneProblem = U.phoneError(p.phone);
+    if (phoneProblem) return res.status(400).json({ error: phoneProblem });
+    if (await U.phoneTaken(p.phone, me.user_id)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้ไปแล้ว' });
+  }
+  let hash = me.password_hash;
+  if (body.newPassword) {
+    if (String(body.newPassword).length < 4) return res.status(400).json({ error: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 4 ตัวอักษร' });
+    if (!bcrypt.compareSync(String(body.currentPassword || ''), me.password_hash || '')) {
+      return res.status(400).json({ error: 'รหัสผ่านปัจจุบันไม่ถูกต้อง' });
     }
-    const token = jwt.sign(
-      { kind: 'admin', id: admin.username, name: admin.name, role: admin.role },
-      JWT_SECRET,
-      { expiresIn: '12h' }
-    );
-    return res.json({ token, user: { kind: 'admin', id: admin.username, name: admin.name, role: admin.role } });
+    hash = bcrypt.hashSync(String(body.newPassword), 10);
   }
-
-  const vendor = await db.get('SELECT * FROM vendors WHERE id = ?', [username]);
-  if (vendor && vendor.password_hash) {
-    if (!vendor.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
-    if (!bcrypt.compareSync(password, vendor.password_hash)) {
-      return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
-    }
-    const token = jwt.sign(
-      { kind: 'vendor', id: vendor.id, name: vendor.name, phone: vendor.phone },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-    return res.json({ token, user: vendorUser(vendor) });
-  }
-
-  res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
+  await db.run(
+    'UPDATE users SET first_name=?, last_name=?, phone=?, address=?, line_id=?, password_hash=? WHERE user_id=?',
+    [p.firstName ?? me.first_name, p.lastName ?? me.last_name, p.phone ?? me.phone,
+      p.address !== undefined ? p.address || null : me.address, p.lineId !== undefined ? p.lineId || null : me.line_id, hash, me.user_id]
+  );
+  res.json(await sessionUser(me.user_id));
 }));
 
 module.exports = router;
+module.exports.sessionUser = sessionUser;
