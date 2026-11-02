@@ -285,6 +285,7 @@
   }
 
   function loadMyBookings(){
+    if (!profile.isRegistered){ state.myBookings = []; state.myBookingsLoaded = true; return Promise.resolve(); }
     return apiGet('/api/bookings/mine').then(function(rows){
       state.myBookings = rows;
       state.myBookingsLoaded = true;
@@ -364,6 +365,7 @@
     // Staff work only in "ระบบจัดการข้อมูล"; the vendor tabs are hidden for them.
     if (profile.isAdmin && state.activeTab !== 'admin') state.activeTab = 'admin';
     if (!profile.isAdmin && state.activeTab === 'admin') state.activeTab = 'map';
+    if (!profile.isRegistered && state.activeTab === 'mine') state.activeTab = 'map';
     renderRoleArea();
     renderTabs();
     if (state.activeTab==='map') renderMap();
@@ -408,6 +410,9 @@
       btn.classList.toggle('active', btn.dataset.tab===state.activeTab);
     });
     document.getElementById('tabs').hidden = profile.isAdmin;
+    // "การจองของฉัน" is for signed-in vendors only; guests see just the market map.
+    var mineTab = document.querySelector('.tab[data-tab="mine"]');
+    if (mineTab) mineTab.hidden = !profile.isRegistered;
     document.getElementById('view-map').hidden = state.activeTab!=='map';
     document.getElementById('view-mine').hidden = state.activeTab!=='mine';
     document.getElementById('view-admin').hidden = state.activeTab!=='admin';
@@ -415,6 +420,7 @@
 
   function setTab(t){
     if (t==='admin' && !profile.isAdmin){ openAuthModal('login'); return; }
+    if (t==='mine' && !profile.isRegistered){ openAuthModal('login'); return; }
     state.activeTab = t; render();
     if (t==='mine') loadMyBookings();
     if (t==='admin') refreshAdminData();
@@ -978,13 +984,32 @@
       }).then(function(){
         toast('ส่งคำขอจองล็อก ' + stall.code + ' แล้ว');
         closeModal();
-        setTab('mine');
+        if (isRegistered) setTab('mine');
+        else openGuestBookedModal(stall.code, phone);
         loadPublicData();
       }).catch(function(err){
         errEl.textContent = err.error || 'ส่งคำขอไม่สำเร็จ กรุณาลองใหม่';
         submitBtn.disabled = false;
       });
     });
+  }
+  // Guests cannot open "การจองของฉัน"; after booking they are told what happens next and offered an account,
+  // which takes over the bookings made from this browser.
+  function openGuestBookedModal(code, phone){
+    var root = document.getElementById('modalRoot');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>ส่งคำขอจองล็อก '+esc(code)+' แล้ว</h3>' +
+      '<p class="sub">เจ้าหน้าที่ตลาดจะตรวจสอบคำขอ และติดต่อกลับทางเบอร์ '+esc(phone)+' เรื่องการอนุมัติและการชำระเงิน</p>' +
+      '<p class="deposit-note">ต้องการติดตามสถานะ ชำระเงินออนไลน์ หรือยกเลิกการจองเอง? สมัครสมาชิกผู้ค้าด้วยเครื่องนี้ ' +
+        'การจองที่ส่งไปแล้วจะย้ายเข้าบัญชีให้อัตโนมัติ</p>' +
+      '<div class="form-actions"><button type="button" class="btn ghost" id="gbClose">ปิด</button>' +
+      '<button type="button" class="btn primary" id="gbRegister">สมัครสมาชิกผู้ค้า</button></div>' +
+      '</div></div>';
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('gbClose').onclick = closeModal;
+    document.getElementById('gbRegister').onclick = function(){ openAuthModal('register'); };
   }
   function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
   document.addEventListener('keydown', function(e){
@@ -1124,6 +1149,7 @@
       applySessionUser(res.user);
       closeModal();
       toast(welcome + res.user.name);
+      if (res.claimedBookings) toast('ย้ายการจองที่ส่งจากเครื่องนี้ ' + res.claimedBookings + ' รายการ เข้าบัญชีแล้ว');
       if (profile.isAdmin){ state.adminMenu = firstMenu(); setTab('admin'); }
       else setTab('mine');
     };
