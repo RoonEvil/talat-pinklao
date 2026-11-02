@@ -1562,7 +1562,13 @@
           fd.append('receipt', img, img.name || 'receipt.jpg');
           return apiUpload('/api/bookings/' + bookingId + '/receipt', fd);
         })
-          .then(function(){ toast('แนบสลิปแล้ว'); loadMyBookings(); })
+          .then(function(res){
+            var r = res && res.slip_result;
+            toast(r === 'ok' ? 'แนบสลิปแล้ว — อ่าน QR ในสลิปได้ รอเจ้าหน้าที่ตลาดยืนยันยอดเงิน'
+              : r === 'no_qr' || r === 'not_slip' ? 'แนบสลิปแล้ว — อ่าน QR ในสลิปไม่ได้ เจ้าหน้าที่ตลาดจะตรวจรูปสลิปเอง'
+              : 'แนบสลิปแล้ว');
+            loadMyBookings(); if (profile.isAdmin) loadAdminBookings();
+          })
           .catch(function(err){ toast(err.error || 'แนบสลิปไม่สำเร็จ', true); });
       });
     }
@@ -1787,6 +1793,17 @@
     if (!state.finesLoaded && canMenu('inspections')){ state.finesLoaded = true; loadFines(); }
   }
 
+  // e-Slip level 1: what the server read from the QR code on the slip (the amount is still checked by staff).
+  function slipBadgeHtml(b){
+    if (!b.receipt_path) return '';
+    var c = b.slip_check;
+    if (c === 'ok') return '<span class="slip-badge ok" title="อ่าน QR ในสลิปได้ เลขอ้างอิงนี้ยังไม่เคยใช้กับการจองอื่น">✅ สลิปมี QR · '+esc(b.slip_bank_name||'')+'<br><span class="mono small">อ้างอิง '+esc(b.slip_ref||'')+'</span></span>';
+    if (c === 'duplicate') return '<span class="slip-badge warn">⚠ เลขอ้างอิงซ้ำกับการจองอื่น ตรวจสอบก่อนยืนยัน</span>';
+    if (c === 'not_slip') return '<span class="slip-badge warn">⚠ QR ในรูปไม่ใช่สลิปโอนเงิน ตรวจด้วยตนเอง</span>';
+    if (c === 'no_qr') return '<span class="slip-badge warn">⚠ อ่าน QR ในสลิปไม่ได้ ตรวจด้วยตนเอง</span>';
+    return '<span class="slip-badge muted">ยังไม่ได้ตรวจ QR</span>';
+  }
+
   // 5.3 ตรวจสอบหลักฐานการชำระเงิน / 5.4 ยืนยันการรับเงิน
   function renderPaymentAdmin(panel, tab){
     var all = state.bookings || [];
@@ -1805,7 +1822,7 @@
         return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span></td>' +
           '<td class="mono">'+esc(b.stall_code)+'</td><td>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+'</td>' +
           '<td class="mono">'+fmtMoney(b.total_amount)+'</td><td>'+esc(st === 'unpaid' ? '—' : methodLabel(b.payment_method))+'</td>' +
-          '<td>'+(b.receipt_path ? '<img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิป แตะเพื่อขยาย">' : '<span class="muted small">—</span>')+'</td>' +
+          '<td>'+(b.receipt_path ? '<img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิป แตะเพื่อขยาย">' + slipBadgeHtml(b) : '<span class="muted small">—</span>')+'</td>' +
           '<td><span class="paybadge '+esc(st)+'">'+esc(payStatusLabel(st))+'</span>' +
             (b.confirmed_by_name ? '<br><span class="muted small">โดย '+esc(b.confirmed_by_name)+'</span>' : '')+'</td>' +
           '<td>'+(st !== 'confirmed' ? '<button type="button" class="btn small ghost" data-cashpay="'+b.id+'">รับเงินสดแล้ว</button>' : '')+'</td></tr>';
@@ -1829,7 +1846,7 @@
       return '<div class="booking-row">' + bookingWhoHtml(b) +
         (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>'
           : '<span class="muted small">'+(cash ? 'ชำระเงินสด' : 'ยังไม่แนบสลิป')+'</span>') +
-        '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.total_amount)+'</span>' +
+        '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.total_amount)+'</span>' + slipBadgeHtml(b) +
         '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>' +
         '</div>';
     }).join('');
