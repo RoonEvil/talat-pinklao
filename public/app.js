@@ -62,13 +62,17 @@
       return x.indexOf('food:') === 0 ? foodTypeLabel(x.slice(5)) : categoryMeta(x).label;
     }).join(', ');
   }
-  // One line per zone that limits its goods, shown under the map.
+  // Zone key under the map: colour, what the zone accepts and how many stalls are free.
   function zoneRulesHtml(){
-    var items = state.zones.filter(function(z){ return zoneAllowed(z).length; }).map(function(z){
-      return '<li><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>' +
-        '<b>'+esc(z.name)+'</b> รับเฉพาะ '+esc(zoneAllowedLabel(z))+'</li>';
+    var items = state.zones.map(function(z){
+      var stalls = stallsInZone(z.id);
+      var free = stalls.filter(function(s){ return stallStatus(s) === 'available'; }).length;
+      return '<li style="--zc:'+zoneColor(z)+'"><span class="zone-swatch" aria-hidden="true"></span>' +
+        '<span class="zone-key-text"><b>'+esc(z.name)+'</b>' +
+        '<span>'+(zoneAllowed(z).length ? 'รับเฉพาะ '+esc(zoneAllowedLabel(z)) : 'รับสินค้าทุกประเภท')+'</span>' +
+        '<span class="zone-key-count">ว่าง '+free+' จาก '+stalls.length+' ล็อก</span></span></li>';
     }).join('');
-    return items ? '<ul class="zone-rules" aria-label="สินค้าที่แต่ละโซนรับ">'+items+'</ul>' : '';
+    return items ? '<ul class="zone-rules" aria-label="สีและสินค้าที่แต่ละโซนรับ">'+items+'</ul>' : '';
   }
   function checkedValues(root, name){
     return [].slice.call(root.querySelectorAll('input[name="'+name+'"]:checked')).map(function(i){ return i.value; });
@@ -413,6 +417,52 @@
   function savedOrAutoLayout(){
     return withoutMissingStalls(cloneLayout(state.settings.mapLayout || autoLayout()));
   }
+  function zoneColor(z){ return ZONE_COLORS[((z && z.color_index) || 0) % 4]; }
+
+  // Public map only: stalls the admin has not placed yet are added in blocks below the map, one per zone,
+  // so vendors still see (and can book) every stall.
+  function placeMissingStalls(l){
+    var placed = {};
+    l.items.forEach(function(it){ if (it.kind === 'stall') placed[it.stallId] = true; });
+    var LEFT = 3, y = l.rows;
+    state.zones.forEach(function(z){
+      var list = stallsInZone(z.id).filter(function(s){ return !placed[s.id]; }).sort(byRowCol);
+      if (!list.length) return;
+      var rowCount = list.length > 1 ? Math.max(2, Math.ceil(list.length / 9)) : 1;
+      var perRow = Math.ceil(list.length / rowCount);
+      if (!l.items.some(function(it){ return it.kind === 'text' && it.label === z.name; })) {
+        l.items.push({ kind:'text', x:0, y:y, w:2, h:1, label:z.name });
+      }
+      list.forEach(function(s, i){
+        l.items.push({ kind:'stall', stallId:s.id, x:LEFT + (i % perRow), y:y + Math.floor(i / perRow) * 2, w:1, h:1 });
+      });
+      l.cols = Math.max(l.cols, LEFT + perRow + 1);
+      y += rowCount * 2;
+    });
+    l.rows = y;
+    return l;
+  }
+
+  // One coloured ground area per zone: the box around its stalls (and its name sign), slightly padded.
+  function zoneAreas(l){
+    return state.zones.map(function(z){
+      var parts = l.items.filter(function(it){
+        if (it.kind === 'text') return it.label === z.name;
+        var s = it.kind === 'stall' && stallById(it.stallId);
+        return s && String(s.zone_id) === String(z.id);
+      });
+      if (!parts.some(function(it){ return it.kind === 'stall'; })) return null;
+      var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, PAD = 0.4;
+      parts.forEach(function(it){
+        x0 = Math.min(x0, it.x); y0 = Math.min(y0, it.y);
+        x1 = Math.max(x1, it.x + it.w); y1 = Math.max(y1, it.y + it.h);
+      });
+      x0 = Math.max(0, x0 - PAD); y0 = Math.max(0, y0 - PAD);
+      x1 = Math.min(l.cols, x1 + PAD); y1 = Math.min(l.rows, y1 + PAD);
+      return { x:x0, y:y0, w:x1 - x0, h:y1 - y0, color:zoneColor(z) };
+    }).filter(Boolean);
+  }
+
   function rectsOverlap(a, b){ return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
   function spotFree(l, rect, ignoreIdx){
     if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > l.cols || rect.y + rect.h > l.rows) return false;
@@ -475,7 +525,7 @@
       '</div>';
 
     var zoneButtons = state.zones.map(function(z){
-      return '<button type="button" class="btn small ghost" data-mapzone="'+z.id+'"><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>'+esc(z.name)+'</button>';
+      return '<button type="button" class="btn small ghost zone-btn" style="--zc:'+zoneColor(z)+'" data-mapzone="'+z.id+'"><span class="zone-dot" style="background:'+zoneColor(z)+'"></span>'+esc(z.name)+'</button>';
     }).join('');
 
     var oldNews = host.querySelector('.news-list');
@@ -542,21 +592,29 @@
   }
 
   function mountPublicMap(host){
-    var layout = savedOrAutoLayout();
+    var layout = placeMissingStalls(savedOrAutoLayout());
     var ctrl = IsoMap.create(document.getElementById('publicMap'), {
       layout: layout,
       view: state.mapView,
       wheelNeedsCtrl: true,
       fitToItems: true,
+      areas: zoneAreas(layout),
       ariaLabel: 'แผนผังตลาด แตะล็อกเพื่อจอง',
       itemStyle: function(it){
-        if (it.kind !== 'stall') return { title: MAP_KIND_LABELS[it.kind] + (it.label ? ': ' + it.label : '') };
+        if (it.kind !== 'stall'){
+          var signZone = it.kind === 'text' && state.zones.find(function(z){ return z.name === it.label; });
+          return signZone
+            ? { title: it.label, color: zoneColor(signZone), cls: 'is-zone-sign' }
+            : { title: MAP_KIND_LABELS[it.kind] + (it.label ? ': ' + it.label : '') };
+        }
         var s = stallById(it.stallId);
         var st = stallStatus(s);
+        var z = zoneById(s.zone_id);
         return {
           color: STALL_STATUS_COLORS[st],
+          zone: zoneColor(z),
           label: s.code,
-          title: s.code + ' · ' + STALL_STATUS_LABELS[st] + ' · ' + fmtMoney(s.price_per_day) + '/วัน',
+          title: s.code + ' · ' + (z ? z.name + ' · ' : '') + STALL_STATUS_LABELS[st] + ' · ' + fmtMoney(s.price_per_day) + '/วัน',
           clickable: st !== 'inactive',
           cls: st === 'inactive' ? 'is-disabled' : '',
           highlight: String(state.mapHighlight) === String(s.id)
