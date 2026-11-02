@@ -1,22 +1,23 @@
-// 1.3 จัดการข้อมูลผู้ใช้: one users table for all three roles. The admin manages everyone;
-// market staff manage vendors only (add, edit, search, suspend, mark regular) and cannot delete.
+// 1.3 จัดการข้อมูลผู้ใช้ (D2 users). Least privilege:
+// - ผู้ดูแลระบบ: the only role that adds, edits, suspends or deletes accounts and assigns roles.
+// - เจ้าหน้าที่ตลาด: views and searches vendor data read-only (to contact and verify vendors); no admin/staff accounts.
+// - ผู้ค้า: no access here; they edit only their own profile through /api/auth/me.
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const wrap = require('../wrap');
-const { requireMenu } = require('../middleware/auth');
+const { requireMenu, requireHead } = require('../middleware/auth');
 const { loadCategories, readGoods } = require('../goods');
 const U = require('../users');
 
 const router = express.Router();
 router.param('id', wrap.numericIdParam);
-router.use(requireMenu('users'));
 
 const isAdmin = (req) => req.staff.role === db.ROLE.ADMIN;
 
-router.get('/', wrap(async (req, res) => {
-  const where = [];
-  const params = [];
+async function listUsers(req, extraWhere = [], extraParams = []) {
+  const where = [...extraWhere];
+  const params = [...extraParams];
   const role = Number(req.query.role);
   if (!isAdmin(req)) where.push('u.role_id = 3');
   else if ([1, 2, 3].includes(role)) { where.push('u.role_id = ?'); params.push(role); }
@@ -34,69 +35,92 @@ router.get('/', wrap(async (req, res) => {
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY u.role_id, u.first_name, u.last_name`, params);
   const cats = await loadCategories();
-  res.json(rows.map((u) => ({
+  // publicUser never includes password_hash.
+  return rows.map((u) => ({
     ...U.publicUser(u, cats),
     bookingTotal: u.booking_total, bookingApproved: u.booking_approved, lastBookingAt: u.last_booking_at
-  })));
+  }));
+}
+
+// View and search: admin sees everyone, staff only vendors.
+router.get('/', requireMenu('users'), wrap(async (req, res) => {
+  res.json(await listUsers(req));
 }));
 
-// Checks shared by add and edit. Returns an error message or null; fills `out` with the values to save.
+router.get('/:id', requireMenu('users'), wrap(async (req, res) => {
+  const rows = await listUsers(req, ['u.user_id = ?'], [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'ไม่พบผู้ใช้นี้' });
+  res.json(rows[0]);
+}));
+
+// Everything below changes accounts: ผู้ดูแลระบบ only.
+router.use(requireHead);
+
+// Checks shared by add and edit. Returns { status, body } on a problem, or null and fills `out`.
 async function readUserForm(req, existing, out) {
   const body = req.body || {};
   const p = U.readProfile(body);
   const roleId = body.roleId === undefined ? (existing ? existing.role_id : db.ROLE.VENDOR) : Number(body.roleId);
-  if (![1, 2, 3].includes(roleId)) return 'สิทธิ์ผู้ใช้ไม่ถูกต้อง';
-  if (!isAdmin(req) && roleId !== db.ROLE.VENDOR) return 'เจ้าหน้าที่ตลาดจัดการได้เฉพาะข้อมูลผู้ค้า';
-  const firstName = p.firstName ?? (existing && existing.first_name);
-  const lastName = p.lastName ?? (existing && existing.last_name);
-  const phone = p.phone ?? (existing && existing.phone);
-  // Accounts moved from the first version may have no last name; it is required when adding or changing it.
-  if (!firstName || (!lastName && (!existing || p.lastName !== undefined))) return 'กรุณากรอกชื่อและนามสกุล';
-  if (!phone && (!existing || p.phone !== undefined)) return 'กรุณากรอกเบอร์โทรศัพท์';
-  if (p.phone !== undefined || !existing) {
-    const phoneProblem = U.phoneError(phone);
-    if (phoneProblem) return phoneProblem;
-  }
-  // Only a new or changed phone is checked, so older duplicate records can still be suspended or edited.
-  const phoneChanged = !existing || phone !== existing.phone;
-  if (phoneChanged && (await U.phoneTaken(phone, existing && existing.user_id))) return 'เบอร์โทรศัพท์นี้ถูกใช้ไปแล้ว';
-
-  // Login: staff always have one; a vendor may be kept without one (e.g. someone who never uses the app).
-  const username = body.username !== undefined ? U.sanitizeUsername(body.username) : (existing ? existing.username : '');
+  if (![1, 2, 3].includes(roleId)) return { status: 400, body: { error: 'สิทธิ์ผู้ใช้ไม่ถูกต้อง' } };
+  const username = body.username !== undefined ? U.sanitizeUsername(body.username) : (existing ? existing.username || '' : '');
   const password = body.password ? String(body.password) : '';
-  if (username && (await U.usernameTaken(username, existing && existing.user_id))) return 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว';
-  if (password && password.length < 4) return 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร';
+  const values = {
+    username, password: existing ? 'kept' : password,
+    firstName: p.firstName ?? (existing ? existing.first_name : ''),
+    lastName: p.lastName ?? (existing ? existing.last_name : ''),
+    phone: p.phone ?? (existing ? existing.phone : ''),
+    address: p.address ?? (existing ? existing.address : '')
+  };
+  // A new account needs every required field. An edit may not blank a field it sends; older accounts that are
+  // still missing a field can be edited (e.g. suspended) and are asked to complete it at their next sign-in.
+  const missing = existing
+    ? U.REQUIRED.filter((k) => k !== 'password' && (body[k] !== undefined || (k === 'username' && body.username !== undefined)) && !String(values[k] || '').trim())
+    : U.missingFields(values);
+  if (missing.length) return { status: 400, body: { error: 'กรุณากรอกข้อมูลให้ครบทุกช่อง', fields: missing } };
+  if (p.phone !== undefined || !existing) {
+    const phoneProblem = U.phoneError(values.phone);
+    if (phoneProblem) return { status: 400, body: { error: phoneProblem, fields: ['phone'] } };
+  }
+  if (password) {
+    const pwProblem = U.passwordError(password);
+    if (pwProblem) return { status: 400, body: { error: pwProblem, fields: ['password'] } };
+  }
+  if (username && (await U.usernameTaken(username, existing && existing.user_id))) {
+    return { status: 409, body: { error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว', fields: ['username'] } };
+  }
+  const phoneChanged = !existing || values.phone !== existing.phone;
+  if (phoneChanged && (await U.phoneTaken(values.phone, existing && existing.user_id))) {
+    return { status: 409, body: { error: 'เบอร์โทรศัพท์นี้ถูกใช้ไปแล้ว', fields: ['phone'] } };
+  }
   const hadLogin = !!(existing && existing.username && existing.password_hash && !existing.password_hash.startsWith('tok:'));
-  if (roleId !== db.ROLE.VENDOR && !username) return 'ผู้ดูแลระบบและเจ้าหน้าที่ตลาดต้องมีชื่อผู้ใช้';
-  if (username && !password && !hadLogin) return 'กรุณาตั้งรหัสผ่านสำหรับชื่อผู้ใช้นี้';
+  if (username && !password && !hadLogin) return { status: 400, body: { error: 'กรุณาตั้งรหัสผ่านสำหรับชื่อผู้ใช้นี้', fields: ['password'] } };
 
   let categoryId = existing ? existing.category_id : null;
   if (roleId === db.ROLE.VENDOR && (body.category !== undefined || !existing)) {
     if (body.category == null || body.category === '') categoryId = null;
     else {
       const goods = readGoods(await loadCategories(), body);
-      if (goods.error) return goods.error;
+      if (goods.error) return { status: 400, body: { error: goods.error, fields: ['category'] } };
       categoryId = goods.categoryId;
     }
   }
   if (roleId !== db.ROLE.VENDOR) categoryId = null;
 
-  // Same first and last name as someone else: warn first, save only when the user confirms.
-  const nameChanged = !existing || firstName !== existing.first_name || lastName !== existing.last_name;
+  // Same first and last name as someone else: warn first, save only when the admin confirms.
+  const nameChanged = !existing || values.firstName !== existing.first_name || values.lastName !== existing.last_name;
   if (nameChanged && body.confirmDuplicateName !== true) {
-    const twin = await U.sameNameUser(firstName, lastName, existing && existing.user_id);
+    const twin = await U.sameNameUser(values.firstName, values.lastName, existing && existing.user_id);
     if (twin) {
-      out.duplicateName = `มีผู้ใช้ชื่อ "${firstName} ${lastName}" (${twin.role_name}) อยู่ในระบบแล้ว ต้องการบันทึกต่อหรือไม่`;
-      return out.duplicateName;
+      return { status: 409, body: { error: `มีผู้ใช้ชื่อ "${values.firstName} ${values.lastName}" (${twin.role_name}) อยู่ในระบบแล้ว ต้องการบันทึกต่อหรือไม่`, code: 'DUPLICATE_NAME' } };
     }
   }
 
   Object.assign(out, {
-    roleId, firstName, lastName, phone,
-    address: p.address !== undefined ? p.address || null : existing ? existing.address : null,
+    roleId,
+    firstName: values.firstName, lastName: values.lastName, phone: values.phone, address: values.address || '',
     lineId: p.lineId !== undefined ? p.lineId || null : existing ? existing.line_id : null,
     username: username || null,
-    passwordHash: password ? bcrypt.hashSync(password, 10) : (username ? existing && existing.password_hash : (hadLogin ? null : existing && existing.password_hash)),
+    passwordHash: password ? bcrypt.hashSync(password, 10) : (existing ? existing.password_hash : null),
     categoryId,
     isRegular: body.isRegular !== undefined ? !!body.isRegular : !!(existing && existing.is_regular),
     active: body.active !== undefined ? !!body.active : existing ? !!existing.active : true
@@ -104,15 +128,10 @@ async function readUserForm(req, existing, out) {
   return null;
 }
 
-function formError(res, out, message) {
-  if (out.duplicateName) return res.status(409).json({ error: message, code: 'DUPLICATE_NAME' });
-  return res.status(400).json({ error: message });
-}
-
 router.post('/', wrap(async (req, res) => {
   const out = {};
   const problem = await readUserForm(req, null, out);
-  if (problem) return formError(res, out, problem);
+  if (problem) return res.status(problem.status).json(problem.body);
   const row = await db.get(
     `INSERT INTO users (role_id, username, password_hash, first_name, last_name, phone, address, line_id, category_id, is_regular, active, consent_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING user_id`,
@@ -128,15 +147,14 @@ async function activeAdminsExcept(id) {
 router.put('/:id', wrap(async (req, res) => {
   const existing = await U.getUser(req.params.id);
   if (!existing) return res.status(404).json({ error: 'ไม่พบผู้ใช้นี้' });
-  if (!isAdmin(req) && existing.role_id !== db.ROLE.VENDOR) return res.status(403).json({ error: 'เจ้าหน้าที่ตลาดจัดการได้เฉพาะข้อมูลผู้ค้า' });
   const out = {};
   const problem = await readUserForm(req, existing, out);
-  if (problem) return formError(res, out, problem);
-  if (existing.role_id === db.ROLE.ADMIN && (out.roleId !== db.ROLE.ADMIN || !out.active) && (await activeAdminsExcept(existing.user_id)) === 0) {
-    return res.status(409).json({ error: 'ต้องมีผู้ดูแลระบบที่ใช้งานอยู่อย่างน้อย 1 บัญชี' });
-  }
+  if (problem) return res.status(problem.status).json(problem.body);
   if (existing.user_id === req.staff.uid && (!out.active || out.roleId !== existing.role_id)) {
     return res.status(409).json({ error: 'ไม่สามารถระงับหรือเปลี่ยนสิทธิ์บัญชีของตนเองได้' });
+  }
+  if (existing.role_id === db.ROLE.ADMIN && (out.roleId !== db.ROLE.ADMIN || !out.active) && (await activeAdminsExcept(existing.user_id)) === 0) {
+    return res.status(409).json({ error: 'ต้องมีผู้ดูแลระบบที่ใช้งานอยู่อย่างน้อย 1 บัญชี' });
   }
   await db.run(
     `UPDATE users SET role_id=?, username=?, password_hash=?, first_name=?, last_name=?, phone=?, address=?, line_id=?,
@@ -147,7 +165,6 @@ router.put('/:id', wrap(async (req, res) => {
 }));
 
 router.delete('/:id', wrap(async (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'เฉพาะผู้ดูแลระบบเท่านั้นที่ลบผู้ใช้ได้' });
   const existing = await U.getUser(req.params.id);
   if (!existing) return res.status(404).json({ error: 'ไม่พบผู้ใช้นี้' });
   if (existing.user_id === req.staff.uid) return res.status(409).json({ error: 'ไม่สามารถลบบัญชีของตนเองได้' });

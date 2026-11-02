@@ -2,7 +2,7 @@
 const express = require('express');
 const db = require('../db');
 const wrap = require('../wrap');
-const { requireStaff, requireHead } = require('../middleware/auth');
+const { requireHead } = require('../middleware/auth');
 
 const router = express.Router();
 router.param('id', wrap.numericIdParam);
@@ -14,7 +14,7 @@ const toApi = (r) => ({
   description: r.description || ''
 });
 
-router.get('/', requireStaff, wrap(async (req, res) => {
+router.get('/', requireHead, wrap(async (req, res) => {
   res.json((await db.all('SELECT * FROM roles ORDER BY role_id')).map(toApi));
 }));
 
