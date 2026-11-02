@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const FORBIDDEN = 'ไม่มีสิทธิ์ดำเนินการนี้';
 
 function readToken(req) {
   const header = req.headers.authorization || '';
@@ -42,7 +43,7 @@ function requireStaff(req, res, next) {
      FROM users u JOIN roles r ON r.role_id = u.role_id WHERE u.user_id = ?`, [p.uid])
     .then((u) => {
       if (!u || !u.active) return res.status(401).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
-      if (u.role_id === db.ROLE.VENDOR) return res.status(403).json({ error: 'สำหรับเจ้าหน้าที่ตลาดเท่านั้น' });
+      if (u.role_id === db.ROLE.VENDOR) return res.status(403).json({ error: FORBIDDEN });
       req.user = { uid: u.user_id, role: u.role_id };
       req.staff = {
         uid: u.user_id,
@@ -58,17 +59,19 @@ function requireStaff(req, res, next) {
 // A staff menu ("จัดการการจอง" = 'bookings' …) that the user's role must include.
 function requireMenu(key) {
   return (req, res, next) => requireStaff(req, res, () => {
-    if (!req.staff.menus.includes(key)) return res.status(403).json({ error: 'สิทธิ์ของคุณไม่สามารถใช้งานเมนูนี้ได้' });
+    if (!req.staff.menus.includes(key)) return res.status(403).json({ error: FORBIDDEN });
     next();
   });
 }
 
-function requireHead(req, res, next) {
-  requireStaff(req, res, () => {
-    if (req.staff.role !== db.ROLE.ADMIN) return res.status(403).json({ error: 'สำหรับผู้ดูแลระบบเท่านั้น' });
+// Only the listed roles (1 = ผู้ดูแลระบบ, 2 = เจ้าหน้าที่ตลาด), read from the database, never from the token.
+function requireRole(...roles) {
+  return (req, res, next) => requireStaff(req, res, () => {
+    if (!roles.includes(req.staff.role)) return res.status(403).json({ error: FORBIDDEN });
     next();
   });
 }
+const requireHead = requireRole(db.ROLE.ADMIN);
 
 // For routes open to both vendors and staff: req.staff is set only for an active staff account with that menu.
 function optionalStaff(menuKey) {
@@ -80,4 +83,4 @@ function optionalStaff(menuKey) {
   };
 }
 
-module.exports = { JWT_SECRET, signUser, optionalAuth, optionalStaff, isStaffToken, requireStaff, requireMenu, requireHead };
+module.exports = { JWT_SECRET, FORBIDDEN, requireRole, signUser, optionalAuth, optionalStaff, isStaffToken, requireStaff, requireMenu, requireHead };
