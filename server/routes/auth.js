@@ -20,6 +20,21 @@ async function sessionUser(id) {
   return out;
 }
 
+// Bookings sent as a guest from this browser (X-Vendor-Token) move into the vendor's account on
+// sign-up or sign-in, so the vendor can follow them in "การจองของฉัน". The empty guest record is removed.
+async function claimGuestBookings(req, userId) {
+  const token = req.get('x-vendor-token');
+  if (!token || token.length < 8) return 0;
+  return db.tx(async (t) => {
+    const guest = await t.get('SELECT user_id FROM users WHERE password_hash = ? AND role_id = 3', [db.guestHash(token)]);
+    if (!guest || guest.user_id === userId) return 0;
+    const moved = await t.all('UPDATE bookings SET vendor_id = ? WHERE vendor_id = ? RETURNING booking_id', [userId, guest.user_id]);
+    await t.run('UPDATE pictures SET uploaded_by = ? WHERE uploaded_by = ?', [userId, guest.user_id]);
+    await t.run('DELETE FROM users WHERE user_id = ?', [guest.user_id]);
+    return moved.length;
+  });
+}
+
 // 1.1 สมัครสมาชิกผู้ค้า: profile, one category of goods, and PDPA consent.
 router.post('/register', wrap(async (req, res) => {
   const body = req.body || {};
@@ -45,7 +60,8 @@ router.post('/register', wrap(async (req, res) => {
      VALUES (3,?,?,?,?,?,?,?,?,NOW()) RETURNING user_id, role_id`,
     [username, bcrypt.hashSync(password, 10), p.firstName, p.lastName, p.phone, p.address || null, p.lineId || null, goods.categoryId]
   );
-  res.status(201).json({ token: signUser(row), user: await sessionUser(row.user_id) });
+  const claimed = await claimGuestBookings(req, row.user_id);
+  res.status(201).json({ token: signUser(row), user: await sessionUser(row.user_id), claimedBookings: claimed });
 }));
 
 // 1.2 เข้าสู่ระบบและตรวจสอบสิทธิ์ — one login for every role.
@@ -59,7 +75,8 @@ router.post('/login', wrap(async (req, res) => {
     return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
   }
   if (!u.active) return res.status(403).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
-  res.json({ token: signUser(u), user: await sessionUser(u.user_id) });
+  const claimed = u.role_id === db.ROLE.VENDOR ? await claimGuestBookings(req, u.user_id) : 0;
+  res.json({ token: signUser(u), user: await sessionUser(u.user_id), claimedBookings: claimed });
 }));
 
 function requireSignedIn(req, res, next) {

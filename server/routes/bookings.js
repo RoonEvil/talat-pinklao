@@ -185,10 +185,11 @@ router.get('/summary', requireMenu('reports'), wrap(async (req, res) => {
   res.json(result);
 }));
 
-// 4.4 ติดตามสถานะการจอง
+// 4.4 ติดตามสถานะการจอง — signed-in vendors only; guests do not get a "my bookings" list.
 router.get('/mine', optionalAuth, wrap(async (req, res) => {
+  if (!req.user || req.user.role !== db.ROLE.VENDOR) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบผู้ค้าเพื่อดูการจองของฉัน' });
   const me = await requester(req);
-  if (!me) return res.json([]);
+  if (!me) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบใหม่' });
   res.json(await listBookings('WHERE b.vendor_id = ?', [me.user_id]));
 }));
 
