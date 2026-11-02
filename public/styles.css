@@ -190,7 +190,7 @@ main{ padding-top:18px; }
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
 }
 .isomap-toolbar{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
-.isomap-toolbar .map-search{ flex:1 1 160px; max-width:240px; margin-left:auto; padding:6px 10px; font-size:.84rem; }
+.isomap-toolbar .map-search{ flex:1 1 200px; max-width:330px; margin-left:auto; padding:6px 10px; font-size:.84rem; }
 .isomap-wrap{
   position:relative; height:440px; border-radius:8px; overflow:hidden; border:1px solid var(--border);
   background:
@@ -388,7 +388,22 @@ input:focus, select:focus, textarea:focus{ outline:2px solid var(--primary); out
 .zone-key-text{ display:flex; flex-direction:column; gap:2px; line-height:1.4; }
 .zone-key-text b{ color:var(--ink); font-weight:700; font-size:.86rem; }
 .zone-key-count{ color:var(--ink); font-weight:600; }
-.zone-btn{ border-color:color-mix(in srgb, var(--zc) 60%, transparent); background:color-mix(in srgb, var(--zc) 14%, transparent); }
+.iso-item.is-dim{ opacity:.28; }
+.map-goods-result{
+  margin:0 14px 10px; padding:10px 12px; border-radius:9px; font-size:.84rem; line-height:1.5;
+  background:color-mix(in srgb, var(--accent) 12%, var(--surface)); border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.map-goods-head{ display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 12px; }
+.map-goods-list{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; max-height:132px; overflow-y:auto; }
+.goods-stall{
+  display:inline-flex; align-items:baseline; gap:6px; padding:5px 10px; border-radius:7px; cursor:pointer;
+  font:700 .82rem 'IBM Plex Mono', monospace; color:var(--ink);
+  background:color-mix(in srgb, var(--zc) 18%, var(--surface)); border:1px solid var(--zc);
+}
+.goods-stall span{ font:500 .72rem 'IBM Plex Sans Thai', sans-serif; color:var(--muted); }
+.goods-stall:hover{ background:color-mix(in srgb, var(--zc) 32%, var(--surface)); }
+.goods-stall:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.zone-btn{border-color:color-mix(in srgb, var(--zc) 60%, transparent); background:color-mix(in srgb, var(--zc) 14%, transparent); }
 .zone-btn:hover{ background:color-mix(in srgb, var(--zc) 26%, transparent); }
 .clash-note{
   margin:4px 0 8px; padding:10px 12px; border-radius:8px; font-size:.84rem; font-weight:600; line-height:1.5;
