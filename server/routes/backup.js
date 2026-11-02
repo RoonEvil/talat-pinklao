@@ -4,9 +4,10 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 const wrap = require('../wrap');
 const { ALLOWED_TYPES } = require('../files');
-const { JWT_SECRET, requireMenu } = require('../middleware/auth');
+const { JWT_SECRET, requireHead } = require('../middleware/auth');
 
-const requireSettings = requireMenu('settings');
+// System settings are for ผู้ดูแลระบบ only.
+const requireSettings = requireHead;
 
 // The restore replaces the users table, so the person restoring may no longer exist afterwards.
 // Step 1 hands back a short-lived token that is only accepted by the image step.

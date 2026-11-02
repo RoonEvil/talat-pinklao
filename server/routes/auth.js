@@ -13,6 +13,8 @@ async function sessionUser(id) {
   const u = await U.getUser(id);
   if (!u) return null;
   const out = U.publicUser(u, await loadCategories());
+  // Accounts made before these fields were required are asked to complete them at sign-in.
+  out.missingFields = U.incompleteProfile(u);
   if (u.role_id !== db.ROLE.VENDOR) {
     const role = await db.get('SELECT menu_access FROM roles WHERE role_id = ?', [u.role_id]);
     out.menus = u.role_id === db.ROLE.ADMIN ? db.MENUS.slice() : String(role.menu_access || '').split(',').filter(Boolean);
@@ -41,24 +43,24 @@ router.post('/register', wrap(async (req, res) => {
   const p = U.readProfile(body);
   const username = U.sanitizeUsername(body.username);
   const password = String(body.password || '');
-  if (!p.firstName || !p.lastName || !p.phone || !username || !password) {
-    return res.status(400).json({ error: 'กรุณากรอกชื่อ นามสกุล เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ' });
-  }
+  const missing = U.missingFields({ ...p, username, password });
+  if (missing.length) return U.missingResponse(res, missing);
   const phoneProblem = U.phoneError(p.phone);
-  if (phoneProblem) return res.status(400).json({ error: phoneProblem });
-  if (password.length < 4) return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
+  if (phoneProblem) return res.status(400).json({ error: phoneProblem, fields: ['phone'] });
+  const pwProblem = U.passwordError(password);
+  if (pwProblem) return res.status(400).json({ error: pwProblem, fields: ['password'] });
   if (body.consent !== true) {
     return res.status(400).json({ error: 'กรุณายินยอมให้เก็บและใช้ข้อมูลส่วนบุคคลก่อนสมัครสมาชิก' });
   }
   const goods = readGoods(await loadCategories(), body);
   if (goods.error) return res.status(400).json({ error: goods.error });
-  if (await U.usernameTaken(username)) return res.status(409).json({ error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว' });
-  if (await U.phoneTaken(p.phone)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้สมัครสมาชิกไปแล้ว' });
+  if (await U.usernameTaken(username)) return res.status(409).json({ error: 'ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว', fields: ['username'] });
+  if (await U.phoneTaken(p.phone)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้สมัครสมาชิกไปแล้ว', fields: ['phone'] });
 
   const row = await db.get(
     `INSERT INTO users (role_id, username, password_hash, first_name, last_name, phone, address, line_id, category_id, consent_at)
      VALUES (3,?,?,?,?,?,?,?,?,NOW()) RETURNING user_id, role_id`,
-    [username, bcrypt.hashSync(password, 10), p.firstName, p.lastName, p.phone, p.address || null, p.lineId || null, goods.categoryId]
+    [username, bcrypt.hashSync(password, 10), p.firstName, p.lastName, p.phone, p.address, p.lineId || null, goods.categoryId]
   );
   const claimed = await claimGuestBookings(req, row.user_id);
   res.status(201).json({ token: signUser(row), user: await sessionUser(row.user_id), claimedBookings: claimed });
@@ -96,15 +98,22 @@ router.put('/me', optionalAuth, requireSignedIn, wrap(async (req, res) => {
   if (!me || !me.active) return res.status(401).json({ error: 'บัญชีนี้ถูกปิดใช้งานแล้ว' });
   const body = req.body || {};
   const p = U.readProfile(body);
-  if (p.firstName === '' || p.lastName === '') return res.status(400).json({ error: 'กรุณากรอกชื่อและนามสกุล' });
-  if (p.phone !== undefined) {
+  // Required profile fields may not be cleared, and the result must be complete.
+  const next = {
+    firstName: p.firstName ?? me.first_name, lastName: p.lastName ?? me.last_name,
+    phone: p.phone ?? me.phone, address: p.address ?? me.address
+  };
+  const missing = U.missingFields(next, U.PROFILE_REQUIRED);
+  if (missing.length) return U.missingResponse(res, missing);
+  if (p.phone !== undefined && p.phone !== me.phone) {
     const phoneProblem = U.phoneError(p.phone);
-    if (phoneProblem) return res.status(400).json({ error: phoneProblem });
-    if (await U.phoneTaken(p.phone, me.user_id)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้ไปแล้ว' });
+    if (phoneProblem) return res.status(400).json({ error: phoneProblem, fields: ['phone'] });
+    if (await U.phoneTaken(p.phone, me.user_id)) return res.status(409).json({ error: 'เบอร์โทรศัพท์นี้ถูกใช้ไปแล้ว', fields: ['phone'] });
   }
   let hash = me.password_hash;
   if (body.newPassword) {
-    if (String(body.newPassword).length < 4) return res.status(400).json({ error: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 4 ตัวอักษร' });
+    const pwProblem = U.passwordError(body.newPassword);
+    if (pwProblem) return res.status(400).json({ error: pwProblem, fields: ['newPassword'] });
     if (!bcrypt.compareSync(String(body.currentPassword || ''), me.password_hash || '')) {
       return res.status(400).json({ error: 'รหัสผ่านปัจจุบันไม่ถูกต้อง' });
     }
@@ -112,8 +121,8 @@ router.put('/me', optionalAuth, requireSignedIn, wrap(async (req, res) => {
   }
   await db.run(
     'UPDATE users SET first_name=?, last_name=?, phone=?, address=?, line_id=?, password_hash=? WHERE user_id=?',
-    [p.firstName ?? me.first_name, p.lastName ?? me.last_name, p.phone ?? me.phone,
-      p.address !== undefined ? p.address || null : me.address, p.lineId !== undefined ? p.lineId || null : me.line_id, hash, me.user_id]
+    [next.firstName, next.lastName, next.phone, next.address,
+      p.lineId !== undefined ? p.lineId || null : me.line_id, hash, me.user_id]
   );
   res.json(await sessionUser(me.user_id));
 }));

@@ -3,7 +3,7 @@ const express = require('express');
 const db = require('../db');
 const wrap = require('../wrap');
 const { imageUpload, savePicture, pictureUrl } = require('../files');
-const { requireMenu } = require('../middleware/auth');
+const { requireHead } = require('../middleware/auth');
 const { currentLayout } = require('./layout');
 
 const router = express.Router();
@@ -17,7 +17,7 @@ router.get('/', wrap(async (req, res) => {
   res.json({ promptPayQrUrl: await currentQr(), mapLayout: await currentLayout() });
 }));
 
-router.post('/qr', requireMenu('settings'), imageUpload('qr', 5 * 1024 * 1024), wrap(async (req, res) => {
+router.post('/qr', requireHead, imageUpload('qr', 5 * 1024 * 1024), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์รูป JPG, PNG, WEBP หรือ GIF' });
   await db.tx(async (t) => {
     const id = await savePicture(t, req.file, 'promptpay_qr', req.staff.uid);

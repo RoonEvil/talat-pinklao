@@ -3,7 +3,7 @@ const express = require('express');
 const db = require('../db');
 const wrap = require('../wrap');
 const { imageUpload, savePicture, pictureUrl } = require('../files');
-const { optionalAuth, optionalStaff, requireMenu, requireStaff } = require('../middleware/auth');
+const { FORBIDDEN, optionalAuth, optionalStaff, requireMenu, requireStaff } = require('../middleware/auth');
 const { loadCategories, splitGoods, readGoods, goodsLabel, allowsGoods, allowedLabel, zoneAllowedIds } = require('../goods');
 const { findNeighborClash } = require('../neighbors');
 const U = require('../users');
@@ -364,6 +364,8 @@ router.delete('/:id', optionalStaff('bookings'), loadOwnedBooking, wrap(async (r
   if (!['pending', 'approved'].includes(req.booking.status)) return res.status(400).json({ error: 'การจองนี้ถูกยกเลิกหรือปฏิเสธไปแล้ว' });
   const payment = await db.get('SELECT status FROM payments WHERE booking_id = ?', [req.booking.booking_id]);
   if (!req.staff && payment) return res.status(400).json({ error: 'แจ้งชำระเงินแล้ว ยกเลิกเองไม่ได้ กรุณาติดต่อเจ้าหน้าที่ตลาด' });
+  // A booking that is already paid is cancelled only by ผู้ดูแลระบบ (money may have to be returned).
+  if (req.staff && payment && req.staff.role !== db.ROLE.ADMIN) return res.status(403).json({ error: FORBIDDEN });
   await db.run("UPDATE bookings SET status='cancelled', decided_at=NOW() WHERE booking_id=?", [req.booking.booking_id]);
   res.json({ ok: true });
 }));
