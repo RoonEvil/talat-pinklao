@@ -6,6 +6,7 @@ const { imageUpload, savePicture, pictureUrl } = require('../files');
 const { FORBIDDEN, optionalAuth, optionalStaff, requireMenu, requireStaff } = require('../middleware/auth');
 const { loadCategories, splitGoods, readGoods, goodsLabel, allowsGoods, allowedLabel, zoneAllowedIds } = require('../goods');
 const { findNeighborClash } = require('../neighbors');
+const { checkSlip, bankName } = require('../slip');
 const U = require('../users');
 
 const router = express.Router();
@@ -27,7 +28,7 @@ const BOOKING_SELECT = `
     b.created_by, TRIM(cb.first_name || ' ' || cb.last_name) AS created_by_name,
     b.approved_by, TRIM(ab.first_name || ' ' || ab.last_name) AS approved_by_name,
     p.payment_id, p.method AS payment_method, COALESCE(p.status, 'unpaid') AS payment_status, p.amount AS paid_amount,
-    p.slip_picture_id, p.paid_at, p.confirmed_at, TRIM(pb.first_name || ' ' || pb.last_name) AS confirmed_by_name
+    p.slip_picture_id, p.slip_ref, p.slip_bank, p.slip_check, p.paid_at, p.confirmed_at, TRIM(pb.first_name || ' ' || pb.last_name) AS confirmed_by_name
   FROM bookings b
   JOIN stalls s ON s.stall_id = b.stall_id
   JOIN zones z ON z.zone_id = s.zone_id
@@ -41,7 +42,8 @@ function toApi(cats) {
   return (r) => {
     const g = splitGoods(cats, r.category_id);
     const { slip_picture_id: slip, ...rest } = r;
-    return { ...rest, category: g.category, food_type: g.kind, goods_label: goodsLabel(cats, r.category_id), receipt_path: pictureUrl(slip) };
+    return { ...rest, category: g.category, food_type: g.kind, goods_label: goodsLabel(cats, r.category_id), receipt_path: pictureUrl(slip),
+      slip_bank_name: bankName(r.slip_bank) };
   };
 }
 
@@ -346,17 +348,40 @@ router.post('/:id/receipt', optionalStaff('payments'), loadOwnedBooking, wrap(as
   next();
 }), imageUpload('receipt', 8 * 1024 * 1024), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์รูป JPG, PNG, WEBP หรือ GIF' });
-  await db.tx(async (t) => {
-    const pictureId = await savePicture(t, req.file, 'slip', req.user ? req.user.uid : req.booking.vendor_id);
-    if (req.payment) {
-      await t.run('UPDATE payments SET slip_picture_id = ? WHERE payment_id = ?', [pictureId, req.payment.payment_id]);
-      if (req.payment.slip_picture_id) await t.run('DELETE FROM pictures WHERE picture_id = ?', [req.payment.slip_picture_id]);
-    } else {
-      await t.run("INSERT INTO payments (booking_id, method, amount, slip_picture_id, status) VALUES (?, 'transfer', ?, ?, 'paid')",
-        [req.booking.booking_id, req.booking.total_amount, pictureId]);
-    }
+  // e-Slip level 1: read the QR on the slip. A slip whose reference was already used for another payment is refused.
+  const slip = checkSlip(req.file.buffer, req.file.mimetype);
+  const usedBy = (ref) => db.get(
+    'SELECT p.booking_id FROM payments p WHERE p.slip_ref = ? AND p.booking_id <> ?', [ref, req.booking.booking_id]);
+  const duplicateError = (row) => res.status(409).json({
+    error: `สลิปนี้เคยใช้แจ้งชำระการจองอื่นแล้ว (การจองเลขที่ ${row.booking_id}) กรุณาแนบสลิปของการโอนครั้งนี้`,
+    code: 'DUPLICATE_SLIP'
   });
-  res.json(await bookingById(req.booking.booking_id));
+  if (slip.ref) {
+    const used = await usedBy(slip.ref);
+    if (used) return duplicateError(used);
+  }
+  try {
+    await db.tx(async (t) => {
+      const pictureId = await savePicture(t, req.file, 'slip', req.user ? req.user.uid : req.booking.vendor_id);
+      const fields = [pictureId, slip.ref || null, slip.bank || null, slip.check];
+      if (req.payment) {
+        await t.run('UPDATE payments SET slip_picture_id = ?, slip_ref = ?, slip_bank = ?, slip_check = ? WHERE payment_id = ?',
+          [...fields, req.payment.payment_id]);
+        if (req.payment.slip_picture_id) await t.run('DELETE FROM pictures WHERE picture_id = ?', [req.payment.slip_picture_id]);
+      } else {
+        await t.run(`INSERT INTO payments (booking_id, method, amount, slip_picture_id, slip_ref, slip_bank, slip_check, status)
+           VALUES (?, 'transfer', ?, ?, ?, ?, ?, 'paid')`, [req.booking.booking_id, req.booking.total_amount, ...fields]);
+      }
+    });
+  } catch (err) {
+    // Two uploads of the same slip at the same moment: the unique index lets only one through.
+    if (err && err.code === '23505' && slip.ref) {
+      const used = await usedBy(slip.ref);
+      if (used) return duplicateError(used);
+    }
+    throw err;
+  }
+  res.json({ ...(await bookingById(req.booking.booking_id)), slip_result: slip.check });
 }));
 
 // 4.3 ยกเลิกการจอง: vendors cancel their own unpaid bookings; staff may cancel any open booking.
