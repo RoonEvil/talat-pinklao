@@ -89,7 +89,7 @@ const SCHEMA = [
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL DEFAULT '',
     phone VARCHAR(15) NOT NULL DEFAULT '',
-    address TEXT,
+    address TEXT NOT NULL DEFAULT '',
     line_id VARCHAR(50),
     category_id INTEGER REFERENCES categories(category_id) ON DELETE SET NULL,
     is_regular BOOLEAN NOT NULL DEFAULT FALSE,
@@ -453,10 +453,25 @@ async function upgradeFromFirstVersion() {
   });
 }
 
+// Required profile fields (first name, last name, phone, address) are NOT NULL; address became required later.
+async function tightenUsers() {
+  await db.run("UPDATE users SET address = '' WHERE address IS NULL");
+  await db.run("ALTER TABLE users ALTER COLUMN address SET DEFAULT ''");
+  await db.run('ALTER TABLE users ALTER COLUMN address SET NOT NULL');
+  // Phones are unique among accounts. Older data may hold duplicates; then the app check still applies
+  // and the index is added on a later start, once the admin has corrected those numbers.
+  try {
+    await db.run("CREATE UNIQUE INDEX IF NOT EXISTS users_account_phone_key ON users (phone) WHERE username IS NOT NULL AND phone <> ''");
+  } catch (e) {
+    console.warn('Duplicate phone numbers among accounts — unique index not created yet:', e.message);
+  }
+}
+
 db.init = async function init() {
   backend = await connect();
   await upgradeFromFirstVersion();
   for (const stmt of SCHEMA) await db.run(stmt);
+  await tightenUsers();
   await seed();
 };
 

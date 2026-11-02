@@ -50,7 +50,26 @@ function readProfile(body) {
 }
 
 function phoneError(phone) {
-  return /^0\d{8,9}$/.test(phone) ? null : 'เบอร์โทรศัพท์ต้องเป็นตัวเลข 9–10 หลัก ขึ้นต้นด้วย 0';
+  return /^0\d{9}$/.test(phone) ? null : 'เบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก ขึ้นต้นด้วย 0';
+}
+
+const MIN_PASSWORD = 8;
+function passwordError(password) {
+  return String(password || '').length >= MIN_PASSWORD ? null : `รหัสผ่านต้องมีอย่างน้อย ${MIN_PASSWORD} ตัวอักษร`;
+}
+
+// Fields every account must have (registration and accounts made by the admin). Line ID stays optional.
+const REQUIRED = ['username', 'password', 'firstName', 'lastName', 'phone', 'address'];
+const PROFILE_REQUIRED = ['firstName', 'lastName', 'phone', 'address'];
+function missingFields(values, list = REQUIRED) {
+  return list.filter((k) => !String(values[k] == null ? '' : values[k]).trim());
+}
+// Profile fields an existing account still lacks (accounts made before these fields were required).
+function incompleteProfile(u) {
+  return missingFields({ firstName: u.first_name, lastName: u.last_name, phone: u.phone, address: u.address }, PROFILE_REQUIRED);
+}
+function missingResponse(res, fields) {
+  return res.status(400).json({ error: 'กรุณากรอกข้อมูลให้ครบทุกช่อง', fields });
 }
 
 // Phones must be unique among accounts. Guests who only booked once (token users) don't count.
@@ -73,4 +92,7 @@ async function sameNameUser(firstName, lastName, exceptId) {
     [firstName, lastName, exceptId || -1]);
 }
 
-module.exports = { USER_COLS, publicUser, getUser, sanitizeUsername, readProfile, phoneError, phoneTaken, usernameTaken, sameNameUser };
+module.exports = {
+  USER_COLS, publicUser, getUser, sanitizeUsername, readProfile, phoneError, passwordError, phoneTaken, usernameTaken, sameNameUser,
+  REQUIRED, PROFILE_REQUIRED, missingFields, incompleteProfile, missingResponse, MIN_PASSWORD
+};
