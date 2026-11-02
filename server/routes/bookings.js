@@ -4,7 +4,7 @@ const db = require('../db');
 const wrap = require('../wrap');
 const { imageUpload, saveImage } = require('../files');
 const { optionalAuth, requireAdmin } = require('../middleware/auth');
-const { CATEGORY_IDS, FOOD_TYPE_IDS, splitList, goodsLabel } = require('../goods');
+const { CATEGORY_IDS, FOOD_TYPE_IDS, splitList, goodsLabel, allowsGoods, allowedLabel } = require('../goods');
 const { findNeighborClash } = require('../neighbors');
 
 const router = express.Router();
@@ -51,6 +51,14 @@ function registeredGoodsError(vendor, goods) {
     return 'ประเภทอาหารนี้ไม่ตรงกับที่ผู้ขายลงทะเบียนไว้';
   }
   return null;
+}
+
+// Each zone may take only certain goods (e.g. a row for drinks only).
+async function zoneGoodsError(stall, category, foodType) {
+  const zone = await db.get('SELECT name, allowed_goods FROM zones WHERE id = ?', [stall.zone_id]);
+  if (!zone || allowsGoods(zone.allowed_goods, category, foodType)) return null;
+  return `ล็อก ${stall.code} อยู่ใน${zone.name} ซึ่งรับเฉพาะ${allowedLabel(zone.allowed_goods)} ` +
+    `ไม่รับ${goodsLabel(category, foodType)} กรุณาเลือกล็อกในโซนอื่น`;
 }
 
 function clashMessage(clash) {
@@ -229,6 +237,8 @@ router.post('/', optionalAuth, wrap(async (req, res) => {
   }
   const goodsError = isVendorLogin && registeredGoodsError(vendor, goods);
   if (goodsError) return res.status(400).json({ error: goodsError });
+  const zoneError = await zoneGoodsError(stall, goods.category, goods.foodType);
+  if (zoneError) return res.status(400).json({ error: zoneError });
 
   const placement = await placementError(stall.id, startDate, endDate, goods);
   if (placement) return res.status(409).json({ error: placement });
@@ -271,6 +281,8 @@ router.post('/staff', requireAdmin, wrap(async (req, res) => {
 
   const stall = await db.get('SELECT * FROM stalls WHERE id = ?', [stallId]);
   if (!stall || !stall.active) return res.status(404).json({ error: 'ล็อกนี้ไม่พร้อมให้จอง' });
+  const zoneError = await zoneGoodsError(stall, goods.category, goods.foodType);
+  if (zoneError) return res.status(400).json({ error: zoneError });
   const placement = await placementError(stall.id, startDate, endDate, goods);
   if (placement) return res.status(409).json({ error: placement });
 
@@ -296,6 +308,9 @@ router.put('/:id/status', requireAdmin, wrap(async (req, res) => {
     return res.status(409).json({ error: 'ไม่สามารถอนุมัติได้ — ทับซ้อนกับการจองที่อนุมัติแล้ว' });
   }
   if (status === 'approved') {
+    const stall = await db.get('SELECT * FROM stalls WHERE id = ?', [booking.stall_id]);
+    const zoneError = stall && (await zoneGoodsError(stall, booking.category, booking.food_type));
+    if (zoneError) return res.status(409).json({ error: 'ไม่สามารถอนุมัติได้ — ' + zoneError });
     const clash = await findNeighborClash({
       stallId: booking.stall_id, startDate: booking.start_date, endDate: booking.end_date,
       category: booking.category, foodType: booking.food_type, statuses: ['approved'], excludeId: booking.id

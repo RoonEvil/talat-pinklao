@@ -43,6 +43,33 @@
     { id:'fresh', label:'อาหารสด (ผัก เนื้อ ปลา)', icon:'🥬' }
   ];
   function foodTypeLabel(id){ var f = FOOD_TYPES.find(function(x){ return x.id===id; }); return f ? f.label : id; }
+  // Goods a zone accepts (same rules as server/goods.js): 'clothing', 'food' (any food) or 'food:drink'; empty = anything.
+  function zoneAllowed(zone){
+    return zone && zone.allowed_goods ? String(zone.allowed_goods).split(',').filter(Boolean) : [];
+  }
+  function zoneAllowsCategory(zone, catId){
+    var a = zoneAllowed(zone);
+    if (!a.length) return true;
+    if (catId === 'food') return a.some(function(x){ return x === 'food' || x.indexOf('food:') === 0; });
+    return a.indexOf(catId) !== -1;
+  }
+  function zoneAllowsFood(zone, foodId){
+    var a = zoneAllowed(zone);
+    return !a.length || a.indexOf('food') !== -1 || a.indexOf('food:' + foodId) !== -1;
+  }
+  function zoneAllowedLabel(zone){
+    return zoneAllowed(zone).map(function(x){
+      return x.indexOf('food:') === 0 ? foodTypeLabel(x.slice(5)) : categoryMeta(x).label;
+    }).join(', ');
+  }
+  // One line per zone that limits its goods, shown under the map.
+  function zoneRulesHtml(){
+    var items = state.zones.filter(function(z){ return zoneAllowed(z).length; }).map(function(z){
+      return '<li><span class="zone-dot" style="background:'+ZONE_COLORS[(z.color_index||0)%4]+'"></span>' +
+        '<b>'+esc(z.name)+'</b> รับเฉพาะ '+esc(zoneAllowedLabel(z))+'</li>';
+    }).join('');
+    return items ? '<ul class="zone-rules" aria-label="สินค้าที่แต่ละโซนรับ">'+items+'</ul>' : '';
+  }
   function checkedValues(root, name){
     return [].slice.call(root.querySelectorAll('input[name="'+name+'"]:checked')).map(function(i){ return i.value; });
   }
@@ -491,6 +518,7 @@
         '<div class="zone-head" style="--zc:'+color+'">' +
         '<h3>'+esc(z.name)+'</h3>' +
         '<p>'+esc(z.description||'')+'</p>' +
+        (zoneAllowed(z).length ? '<div class="zone-rule">รับเฉพาะ: <b>'+esc(zoneAllowedLabel(z))+'</b></div>' : '') +
         '<div class="zone-stat">ว่าง '+availableCount+' จาก '+stalls.length+' ล็อก</div>' +
         '</div>' +
         '<div class="stall-grid">'+(rowsHtml||'<div class="empty small">ยังไม่มีล็อก</div>')+'</div>' +
@@ -512,6 +540,7 @@
         '</div>' +
         '<div class="isomap-wrap"><div class="isomap" id="publicMap"></div>' + mapZoomControls() + '</div>' +
         '<div class="isomap-hint muted small">ลากเพื่อเลื่อนแผนผัง · ใช้ปุ่ม + / − หรือ Ctrl + ล้อเมาส์เพื่อซูม</div>' +
+        zoneRulesHtml() +
       '</div>' +
       legend +
       '<div class="section-head"><h2 style="font-size:1rem">รายการล็อกแยกตามโซน</h2></div>' +
@@ -647,19 +676,36 @@
     var regularRate = stall.regular_price_per_day != null ? stall.regular_price_per_day : stall.price_per_day;
     // A registered account picks only from the goods it signed up to sell (the server checks this too).
     var allowedCats = isRegistered && profile.categories && profile.categories.length ? profile.categories : null;
-    var catChoices = allowedCats ? CATEGORIES.filter(function(c){ return allowedCats.indexOf(c.id) !== -1; }) : CATEGORIES;
+    // ...and only goods this stall's zone accepts (e.g. a drinks-only row).
+    var allowedFoods = isRegistered && profile.foodTypes && profile.foodTypes.length ? profile.foodTypes : null;
+    var foodChoices = (allowedFoods ? FOOD_TYPES.filter(function(f){ return allowedFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES)
+      .filter(function(f){ return zoneAllowsFood(zone, f.id); });
+    var catChoices = (allowedCats ? CATEGORIES.filter(function(c){ return allowedCats.indexOf(c.id) !== -1; }) : CATEGORIES)
+      .filter(function(c){ return zoneAllowsCategory(zone, c.id) && (c.id !== 'food' || foodChoices.length); });
+    var zoneRule = zoneAllowed(zone).length ? zoneAllowedLabel(zone) : '';
+    if (!catChoices.length){
+      root.innerHTML =
+        '<div class="modal-back" id="mb"><div class="modal">' +
+        '<h3>จองล็อก '+esc(stall.code)+' ไม่ได้</h3>' +
+        '<div class="clash-note" role="alert">ล็อกนี้อยู่ใน'+esc(zone ? zone.name : 'โซนนี้')+' ซึ่งรับเฉพาะ'+esc(zoneRule)+
+          ' ไม่ตรงกับสินค้าที่บัญชีนี้ลงทะเบียนไว้ กรุณาเลือกล็อกในโซนอื่น</div>' +
+        '<div class="form-actions"><button type="button" class="btn primary" id="bfCancel">ตกลง</button></div>' +
+        '</div></div>';
+      document.getElementById('bfCancel').onclick = closeModal;
+      document.getElementById('mb').addEventListener('click', function(e){ if (e.target.id === 'mb') closeModal(); });
+      return;
+    }
     // Auto-fill from what this vendor did last time: remembered in this browser, or their latest booking.
     var prev = lastBookingChoices();
-    var myCategory = (prev.category && catChoices.some(function(c){ return c.id === prev.category; })) ? prev.category : (stall.category || 'other');
-    if (allowedCats && allowedCats.indexOf(myCategory) === -1) myCategory = catChoices[0].id;
+    var inChoices = function(id){ return catChoices.some(function(c){ return c.id === id; }); };
+    var myCategory = prev.category && inChoices(prev.category) ? prev.category :
+      (inChoices(stall.category || 'other') ? (stall.category || 'other') : catChoices[0].id);
     var autoFilled = !!(prev.category || prev.days || prev.note) || !!(profile.vendorName || profile.vendorPhone);
     var endDefault = prev.days > 1 ? addDaysIso(minDate, prev.days - 1) : minDate;
 
     var catOptions = catChoices.map(function(c){
       return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
-    var allowedFoods = isRegistered && profile.foodTypes && profile.foodTypes.length ? profile.foodTypes : null;
-    var foodChoices = allowedFoods ? FOOD_TYPES.filter(function(f){ return allowedFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES;
     var foodPick = foodChoices.length === 1 ? foodChoices[0].id :
       (prev.foodType && foodChoices.some(function(f){ return f.id === prev.foodType; }) ? prev.foodType : '');
     var foodOptions = foodOptionsHtml(foodChoices, foodPick, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
@@ -668,6 +714,7 @@
       '<div class="modal-back" id="mb"><div class="modal">' +
       '<h3>จองล็อก '+esc(stall.code)+'</h3>' +
       '<div class="sub">'+esc(zone?zone.name:'')+' · ราคาทั่วไป '+fmtMoney(stall.price_per_day)+'/วัน · ราคาสมาชิก '+fmtMoney(regularRate)+'/วัน</div>' +
+      (zoneRule ? '<p class="zone-rule">โซนนี้รับเฉพาะ: <b>'+esc(zoneRule)+'</b></p>' : '') +
       (autoFilled ? '<p class="autofill-note" id="bfAutoNote">✨ กรอกข้อมูลจากการจองครั้งก่อนให้แล้ว ตรวจสอบแล้วกดส่งคำขอได้เลย <button type="button" class="link-btn" id="bfClearAuto">ล้างข้อมูล</button></p>' : '') +
       '<form id="bookForm" autocomplete="on">' +
         '<div class="field"><label for="bfName">ชื่อผู้ขาย</label><input id="bfName" name="name" autocomplete="name" required value="'+esc(profile.vendorName)+'"></div>' +
@@ -1268,10 +1315,19 @@
     var vendor = w.mode === 'existing' ? state.vendors.find(function(v){ return v.id === w.vendorId; }) : null;
     var vCats = vendor && vendor.categories ? vendor.categories.split(',') : null;
     var vFoods = vendor && vendor.food_types ? vendor.food_types.split(',') : null;
-    var catChoices = vCats ? CATEGORIES.filter(function(c){ return vCats.indexOf(c.id) !== -1; }) : CATEGORIES;
+    // Goods are limited by the vendor's registration and by the zone of the chosen stall.
+    var pickedStall = w.stallId ? stallById(w.stallId) : null;
+    var pickedZone = pickedStall ? zoneById(pickedStall.zone_id) : null;
+    var foodChoices = (vFoods ? FOOD_TYPES.filter(function(f){ return vFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES)
+      .filter(function(f){ return zoneAllowsFood(pickedZone, f.id); });
+    var catChoices = (vCats ? CATEGORIES.filter(function(c){ return vCats.indexOf(c.id) !== -1; }) : CATEGORIES)
+      .filter(function(c){ return zoneAllowsCategory(pickedZone, c.id) && (c.id !== 'food' || foodChoices.length); });
+    var zoneMismatch = pickedStall && !catChoices.length
+      ? 'ล็อก ' + pickedStall.code + ' อยู่ใน' + (pickedZone ? pickedZone.name : 'โซนนี้') + ' ซึ่งรับเฉพาะ' + zoneAllowedLabel(pickedZone) +
+        (vendor ? ' ไม่ตรงกับสินค้าที่ผู้ขายรายนี้ลงทะเบียนไว้' : '') + ' กรุณาเลือกล็อกอื่น'
+      : null;
     if (w.category && !catChoices.some(function(c){ return c.id === w.category; })) w.category = '';
-    if (!w.category && vCats) w.category = catChoices[0].id;
-    var foodChoices = vFoods ? FOOD_TYPES.filter(function(f){ return vFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES;
+    if (!w.category && (vCats || catChoices.length === 1) && catChoices.length) w.category = catChoices[0].id;
     if (w.foodType && !foodChoices.some(function(f){ return f.id === w.foodType; })) w.foodType = '';
     if (!w.foodType && foodChoices.length === 1) w.foodType = foodChoices[0].id;
 
@@ -1331,10 +1387,11 @@
       '<div class="field"><label for="wkNote">หมายเหตุ (ถ้ามี)</label><input id="wkNote" value="'+esc(w.note)+'" placeholder="เช่น ลูกค้าโทรมาจอง"></div>' +
       '<label class="checkline"><input type="checkbox" id="wkPaid" '+(w.paid?'checked':'')+'> รับเงินสดแล้ว</label>' +
       (price ? '<p class="deposit-note" style="font-size:.88rem">'+price+'</p>' : '') +
+      (zoneMismatch ? '<div class="clash-note" role="alert">'+esc(zoneMismatch)+'</div>' : '') +
       (clash ? '<div class="clash-note" role="alert">'+esc(clash)+'</div>' : '') +
       '<div class="form-error" id="wkErr"></div>' +
       '<div class="form-actions"><button type="button" class="btn ghost" id="wkReset">ล้างฟอร์ม</button>' +
-        '<button type="button" class="btn primary" id="wkSubmit"'+(clash?' disabled':'')+'>จองให้ลูกค้า</button></div>' +
+        '<button type="button" class="btn primary" id="wkSubmit"'+(clash||zoneMismatch?' disabled':'')+'>จองให้ลูกค้า</button></div>' +
       '</div>';
 
     var bindChange = function(id, key){
@@ -1772,35 +1829,109 @@
     };
   }
 
+  // Checkboxes for "what this zone accepts". Ticking "อาหารทุกประเภท" covers every food type.
+  function allowedPickerHtml(name, selected){
+    selected = selected || [];
+    var anyFood = selected.indexOf('food') !== -1;
+    var chip = function(value, text, extra){
+      return '<label class="check-chip"><input type="checkbox" name="'+name+'" value="'+value+'"'+
+        (selected.indexOf(value) !== -1 ? ' checked' : '')+(extra||'')+'>'+text+'</label>';
+    };
+    var cats = CATEGORIES.filter(function(c){ return c.id !== 'food'; }).map(function(c){ return chip(c.id, c.icon+' '+esc(c.label)); }).join('');
+    var foods = FOOD_TYPES.map(function(f){ return chip('food:'+f.id, f.icon+' '+esc(f.label), anyFood ? ' disabled' : ''); }).join('');
+    return '<div class="field"><span class="field-label">สินค้าที่โซนนี้รับ <span class="muted">(ไม่ติ๊กเลย = รับทุกประเภท)</span></span>' +
+      '<div class="check-grid">'+chip('food', '🍽️ อาหารทุกประเภท')+cats+'</div>' +
+      '<span class="field-label muted small" style="margin-top:8px">หรือเฉพาะอาหารบางประเภท เช่น แถวเครื่องดื่มอย่างเดียว</span>' +
+      '<div class="check-grid">'+foods+'</div></div>';
+  }
+  function bindAllowedPicker(root, name){
+    var all = root.querySelector('input[name="'+name+'"][value="food"]');
+    if (!all) return;
+    all.addEventListener('change', function(){
+      root.querySelectorAll('input[name="'+name+'"][value^="food:"]').forEach(function(i){
+        i.disabled = all.checked; if (all.checked) i.checked = false;
+      });
+    });
+  }
+
+  function openEditZoneModal(zoneId){
+    var z = zoneById(zoneId);
+    if (!z) return;
+    var root = document.getElementById('modalRoot');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>แก้ไขโซน — '+esc(z.name)+'</h3>' +
+      '<form id="zoneForm">' +
+        '<div class="field"><label for="ezName">ชื่อโซน</label><input id="ezName" required value="'+esc(z.name)+'"></div>' +
+        '<div class="field"><label for="ezDesc">รายละเอียด</label><input id="ezDesc" value="'+esc(z.description||'')+'"></div>' +
+        allowedPickerHtml('ezAllow', zoneAllowed(z)) +
+        '<p class="muted small">การจองที่มีอยู่แล้วไม่ถูกยกเลิก แต่คำขอที่ยังรออนุมัติจะอนุมัติได้เฉพาะสินค้าที่โซนรับ</p>' +
+        '<div class="form-error" id="ezErr"></div>' +
+        '<div class="form-actions">' +
+          '<button type="button" class="btn ghost" id="ezCancel">ยกเลิก</button>' +
+          '<button type="submit" class="btn primary">บันทึก</button>' +
+        '</div>' +
+      '</form>' +
+      '</div></div>';
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('ezCancel').onclick = closeModal;
+    var form = document.getElementById('zoneForm');
+    bindAllowedPicker(form, 'ezAllow');
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var name = document.getElementById('ezName').value.trim();
+      var errEl = document.getElementById('ezErr');
+      if (!name){ errEl.textContent = 'กรุณากรอกชื่อโซน'; return; }
+      apiPut('/api/zones/' + z.id, {
+        name: name, description: document.getElementById('ezDesc').value.trim() || null,
+        allowedGoods: checkedValues(form, 'ezAllow')
+      }).then(function(){ toast('บันทึกโซนแล้ว'); closeModal(); loadPublicData(); })
+        .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกโซนไม่สำเร็จ'; });
+    });
+  }
+
   function renderZoneAdmin(panel){
     var rows = state.zones.map(function(z){
       var color = ZONE_COLORS[(z.color_index||0)%4];
       var count = stallsInZone(z.id).length;
       return '<tr><td><span class="zone-chip"><span class="zone-dot" style="background:'+color+'"></span>'+esc(z.name)+'</span></td>' +
-        '<td>'+esc(z.description||'')+'</td><td>'+count+'</td>' +
-        '<td><button type="button" class="btn small danger" data-delzone="'+z.id+'">ลบ</button></td></tr>';
+        '<td>'+esc(z.description||'')+'</td>' +
+        '<td>'+(zoneAllowed(z).length ? esc(zoneAllowedLabel(z)) : '<span class="muted">ทุกประเภท</span>')+'</td>' +
+        '<td>'+count+'</td>' +
+        '<td><button type="button" class="btn small ghost" data-editzone="'+z.id+'">แก้ไข</button> ' +
+        '<button type="button" class="btn small danger" data-delzone="'+z.id+'">ลบ</button></td></tr>';
     }).join('');
 
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="table-wrap"><table><thead><tr><th>โซน</th><th>รายละเอียด</th><th>จำนวนล็อก</th><th></th></tr></thead>' +
-      '<tbody>'+(rows||'<tr><td colspan="4" class="empty">ยังไม่มีโซน</td></tr>')+'</tbody></table></div>' +
-      '<div class="add-row" style="margin-top:14px">' +
-        '<div class="field"><label for="zName">ชื่อโซน</label><input id="zName" placeholder="โซนโปรโมชั่นตามฤดูกาล"></div>' +
-        '<div class="field"><label for="zDesc">รายละเอียด</label><input id="zDesc" placeholder="ระบุตำแหน่งโดยย่อ"></div>' +
+      '<p class="muted small" style="margin:0 0 12px">กำหนดว่าแต่ละโซนรับสินค้าอะไร เช่น แถวนี้รับเฉพาะเครื่องดื่ม แถวนี้รับเฉพาะอาหาร ระบบจะไม่ให้จองหรืออนุมัติสินค้าที่โซนไม่รับ</p>' +
+      '<div class="table-wrap"><table><thead><tr><th>โซน</th><th>รายละเอียด</th><th>สินค้าที่รับ</th><th>จำนวนล็อก</th><th></th></tr></thead>' +
+      '<tbody>'+(rows||'<tr><td colspan="5" class="empty">ยังไม่มีโซน</td></tr>')+'</tbody></table></div>' +
+      '<div id="zAddBox" style="margin-top:14px">' +
+        '<div class="add-row">' +
+          '<div class="field"><label for="zName">ชื่อโซน</label><input id="zName" placeholder="แถวเครื่องดื่ม"></div>' +
+          '<div class="field"><label for="zDesc">รายละเอียด</label><input id="zDesc" placeholder="ระบุตำแหน่งโดยย่อ"></div>' +
+        '</div>' +
+        allowedPickerHtml('zAllow', []) +
         '<button type="button" class="btn primary" id="zAdd">เพิ่มโซน</button>' +
       '</div></div>';
 
+    var addBox = document.getElementById('zAddBox');
+    bindAllowedPicker(addBox, 'zAllow');
     var zAddBtn = document.getElementById('zAdd');
     zAddBtn.onclick = function(){
       var name = document.getElementById('zName').value.trim();
       var desc = document.getElementById('zDesc').value.trim();
       if (!name){ toast('กรุณากรอกชื่อโซน', true); return; }
       zAddBtn.disabled = true;
-      apiPost('/api/zones', { name:name, description:desc||null, colorIndex: state.zones.length % 4 })
-        .then(function(){ toast('เพิ่มโซนแล้ว'); document.getElementById('zName').value=''; document.getElementById('zDesc').value=''; loadPublicData(); })
+      apiPost('/api/zones', { name:name, description:desc||null, colorIndex: state.zones.length % 4, allowedGoods: checkedValues(addBox, 'zAllow') })
+        .then(function(){ toast('เพิ่มโซนแล้ว'); loadPublicData(); })
         .catch(function(err){ toast(err.error || 'เพิ่มโซนไม่สำเร็จ', true); })
         .then(function(){ zAddBtn.disabled = false; });
     };
+    panel.querySelectorAll('[data-editzone]').forEach(function(btn){
+      btn.addEventListener('click', function(){ openEditZoneModal(btn.dataset.editzone); });
+    });
     panel.querySelectorAll('[data-delzone]').forEach(function(btn){
       btn.addEventListener('click', function(){
         var z = zoneById(btn.dataset.delzone);
@@ -1824,7 +1955,7 @@
         '<td>'+fmtMoney(s.price_per_day)+'</td>' +
         '<td>'+fmtMoney(s.regular_price_per_day)+'</td>' +
         '<td><span class="badge '+(s.active?'approved':'cancelled')+'">'+(s.active?'เปิดใช้งาน':'ปิด')+'</span></td>' +
-        '<td><button type="button" class="btn small ghost" data-editprice="'+s.id+'">แก้ไขราคา</button> ' +
+        '<td><button type="button" class="btn small ghost" data-editprice="'+s.id+'">แก้ไข / ย้ายโซน</button> ' +
         '<button type="button" class="btn small ghost" data-toggle="'+s.id+'">'+(s.active?'ปิดล็อก':'เปิดล็อก')+'</button> ' +
         '<button type="button" class="btn small danger" data-delstall="'+s.id+'">ลบ</button></td></tr>';
     }).join('');
@@ -1886,8 +2017,12 @@
     var root = document.getElementById('modalRoot');
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
-      '<h3>แก้ไขราคา — ล็อก '+esc(s.code)+'</h3>' +
+      '<h3>แก้ไขล็อก '+esc(s.code)+'</h3>' +
       '<form id="priceForm">' +
+        '<div class="field"><label for="epZone">โซน</label><select id="epZone">' + state.zones.map(function(z){
+          return '<option value="'+z.id+'"'+(String(z.id)===String(s.zone_id)?' selected':'')+'>'+esc(z.name)+
+            (zoneAllowed(z).length ? ' (รับเฉพาะ'+esc(zoneAllowedLabel(z))+')' : '')+'</option>';
+        }).join('') + '</select></div>' +
         '<div class="field"><label for="epGuest">ราคาทั่วไป/วัน (฿)</label><input id="epGuest" type="number" min="0" step="10" value="'+(Number(s.price_per_day)||0)+'" required></div>' +
         '<div class="field"><label for="epRegular">ราคาสมาชิก/วัน (฿)</label><input id="epRegular" type="number" min="0" step="10" value="'+(Number(s.regular_price_per_day)||0)+'" required></div>' +
         '<div class="form-error" id="epErr"></div>' +
@@ -1906,9 +2041,9 @@
       var regular = parseFloat(document.getElementById('epRegular').value);
       var errEl = document.getElementById('epErr');
       if (!(guest>=0) || !(regular>=0)){ errEl.textContent = 'กรุณากรอกราคาที่ถูกต้อง'; return; }
-      apiPut('/api/stalls/' + stallId, { pricePerDay: guest, regularPricePerDay: regular })
-        .then(function(){ toast('อัปเดตราคาแล้ว'); closeModal(); loadPublicData(); })
-        .catch(function(){ errEl.textContent = 'อัปเดตราคาไม่สำเร็จ'; });
+      apiPut('/api/stalls/' + stallId, { pricePerDay: guest, regularPricePerDay: regular, zoneId: document.getElementById('epZone').value })
+        .then(function(){ toast('บันทึกล็อกแล้ว'); closeModal(); loadPublicData(); })
+        .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกล็อกไม่สำเร็จ'; });
     });
   }
 

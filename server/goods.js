@@ -36,4 +36,29 @@ function goodsLabel(category, foodType) {
   return CATEGORY_LABELS[category] || category;
 }
 
-module.exports = { CATEGORY_IDS, FOOD_TYPE_IDS, splitList, goodsKey, goodsLabel };
+// What a zone accepts: a list of category ids ("clothing") and/or single food types ("food:drink").
+// "food" accepts every kind of food. An empty list accepts anything.
+function normalizeAllowed(list) {
+  const items = (Array.isArray(list) ? list : splitList(list)).map(String);
+  const out = [];
+  for (const it of items) {
+    const ok = CATEGORY_IDS.includes(it) || (it.startsWith('food:') && FOOD_TYPE_IDS.includes(it.slice(5)));
+    if (ok && !out.includes(it)) out.push(it);
+  }
+  return out.includes('food') ? out.filter((it) => !it.startsWith('food:')) : out;
+}
+
+function allowsGoods(allowed, category, foodType) {
+  const list = normalizeAllowed(allowed);
+  if (!list.length) return true;
+  if (category !== 'food') return list.includes(category);
+  return list.includes('food') || list.includes(`food:${foodType}`);
+}
+
+function allowedLabel(allowed) {
+  return normalizeAllowed(allowed)
+    .map((it) => (it.startsWith('food:') ? FOOD_TYPE_LABELS[it.slice(5)] : CATEGORY_LABELS[it]))
+    .join(', ');
+}
+
+module.exports = { CATEGORY_IDS, FOOD_TYPE_IDS, splitList, goodsKey, goodsLabel, normalizeAllowed, allowsGoods, allowedLabel };

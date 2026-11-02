@@ -88,8 +88,11 @@ const SCHEMA = [
     name TEXT NOT NULL,
     description TEXT,
     color_index INTEGER DEFAULT 0,
-    sort_order INTEGER DEFAULT 0
+    sort_order INTEGER DEFAULT 0,
+    allowed_goods TEXT
   )`,
+  // Goods a zone accepts (see goods.js normalizeAllowed); empty means any goods.
+  'ALTER TABLE zones ADD COLUMN IF NOT EXISTS allowed_goods TEXT',
   `CREATE TABLE IF NOT EXISTS stalls (
     id SERIAL PRIMARY KEY,
     zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
@@ -170,7 +173,7 @@ const SCHEMA = [
 db.TABLES = [
   { name: 'admins', serial: false, cols: ['username', 'name', 'password_hash', 'role', 'active', 'created_at'] },
   { name: 'vendors', serial: false, cols: ['id', 'name', 'phone', 'category', 'password_hash', 'active', 'is_regular', 'joined_at', 'last_booking_at', 'categories', 'food_types'] },
-  { name: 'zones', serial: true, cols: ['id', 'name', 'description', 'color_index', 'sort_order'] },
+  { name: 'zones', serial: true, cols: ['id', 'name', 'description', 'color_index', 'sort_order', 'allowed_goods'] },
   { name: 'stalls', serial: true, cols: ['id', 'zone_id', 'code', 'size_sqm', 'category', 'price_per_day', 'regular_price_per_day', 'pos_row', 'pos_col', 'active'] },
   { name: 'bookings', serial: true, cols: ['id', 'stall_id', 'zone_id', 'vendor_token', 'vendor_name', 'vendor_phone', 'category', 'start_date', 'end_date', 'note', 'deposit_amount', 'rate_type', 'payment_method', 'payment_status', 'receipt_path', 'status', 'created_at', 'decided_at', 'food_type', 'created_by'] },
   { name: 'announcements', serial: true, cols: ['id', 'title', 'type', 'body', 'pinned', 'created_at'] },
@@ -180,8 +183,10 @@ db.TABLES = [
 
 // The market starts with 55 stalls: F1–F28 in the food zone and G1–G27 in the general zone.
 const DEFAULT_ZONES = [
-  { name: 'โซนอาหารสดและสำเร็จรูป', description: 'อาหารปรุงสำเร็จ ของว่าง และเครื่องดื่ม ใต้เต็นท์หลัก', color: 0, order: 1, prefix: 'F', count: 28, category: () => 'food' },
-  { name: 'โซนสินค้าทั่วไป', description: 'เสื้อผ้า ของใช้ในบ้าน และสินค้าทั่วไป', color: 1, order: 2, prefix: 'G', count: 27, category: (i) => (i % 2 === 0 ? 'general' : 'clothing') }
+  { name: 'โซนอาหารสดและสำเร็จรูป', description: 'อาหารปรุงสำเร็จ ของว่าง และเครื่องดื่ม ใต้เต็นท์หลัก', color: 0, order: 1, prefix: 'F', count: 28, category: () => 'food',
+    allowed: 'food' },
+  { name: 'โซนสินค้าทั่วไป', description: 'เสื้อผ้า ของใช้ในบ้าน และสินค้าทั่วไป', color: 1, order: 2, prefix: 'G', count: 27, category: (i) => (i % 2 === 0 ? 'general' : 'clothing'),
+    allowed: 'clothing,general,service,other' }
 ];
 
 async function addDefaultStalls(t, zoneId, z) {
@@ -200,8 +205,8 @@ async function seed() {
     await db.tx(async (t) => {
       for (const z of DEFAULT_ZONES) {
         const zone = await t.get(
-          'INSERT INTO zones (name, description, color_index, sort_order) VALUES (?,?,?,?) RETURNING id',
-          [z.name, z.description, z.color, z.order]
+          'INSERT INTO zones (name, description, color_index, sort_order, allowed_goods) VALUES (?,?,?,?,?) RETURNING id',
+          [z.name, z.description, z.color, z.order, z.allowed]
         );
         await addDefaultStalls(t, zone.id, z);
       }
@@ -241,6 +246,16 @@ async function migrate() {
         if (zone) await addDefaultStalls(t, zone.id, z);
       }
       await t.run('UPDATE settings SET seed_version = 2 WHERE id = 1');
+    });
+  }
+  if (v < 3) {
+    // Zones start out sorted by goods: the default food zone takes food only, the general zone the rest.
+    // Only zones that still have the default name and no setting yet are touched.
+    await db.tx(async (t) => {
+      for (const z of DEFAULT_ZONES) {
+        await t.run('UPDATE zones SET allowed_goods = ? WHERE name = ? AND allowed_goods IS NULL', [z.allowed, z.name]);
+      }
+      await t.run('UPDATE settings SET seed_version = 3 WHERE id = 1');
     });
   }
 }
