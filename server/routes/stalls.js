@@ -37,16 +37,28 @@ router.post('/', requireAdmin, wrap(async (req, res) => {
 router.put('/:id', requireAdmin, wrap(async (req, res) => {
   const stall = await db.get('SELECT * FROM stalls WHERE id = ?', [req.params.id]);
   if (!stall) return res.status(404).json({ error: 'ไม่พบล็อกนี้' });
-  const { active, pricePerDay, regularPricePerDay } = req.body || {};
+  const { active, pricePerDay, regularPricePerDay, zoneId } = req.body || {};
   if ((pricePerDay != null && !validPrice(pricePerDay)) || (regularPricePerDay != null && !validPrice(regularPricePerDay))) {
     return res.status(400).json({ error: 'ราคาไม่ถูกต้อง' });
   }
+  // Moving a stall into another zone (e.g. a drinks-only row).
+  let newZone = stall.zone_id;
+  if (zoneId != null && String(zoneId) !== String(stall.zone_id)) {
+    if (!wrap.isId(zoneId) || !(await db.get('SELECT id FROM zones WHERE id = ?', [zoneId]))) {
+      return res.status(404).json({ error: 'ไม่พบโซนนี้' });
+    }
+    if (await db.get('SELECT id FROM stalls WHERE zone_id = ? AND code = ?', [zoneId, stall.code])) {
+      return res.status(409).json({ error: 'โซนปลายทางมีล็อกรหัสนี้อยู่แล้ว' });
+    }
+    newZone = Number(zoneId);
+  }
   const updated = await db.get(
-    'UPDATE stalls SET active=?, price_per_day=?, regular_price_per_day=? WHERE id=? RETURNING *',
+    'UPDATE stalls SET active=?, price_per_day=?, regular_price_per_day=?, zone_id=? WHERE id=? RETURNING *',
     [
       active != null ? (active ? 1 : 0) : stall.active,
       pricePerDay != null ? pricePerDay : stall.price_per_day,
       regularPricePerDay != null ? regularPricePerDay : stall.regular_price_per_day,
+      newZone,
       req.params.id
     ]
   );
