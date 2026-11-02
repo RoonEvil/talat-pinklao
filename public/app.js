@@ -396,9 +396,6 @@
       list.forEach(function(s, i){
         items.push({ kind:'stall', stallId:s.id, x:LEFT + (i % perRow), y:y + Math.floor(i / perRow) * 2, w:1, h:1 });
       });
-      for (var r = 0; r < rowCount - 1; r++){
-        for (var c = 1; c < perRow; c += 2) items.push({ kind:'tree', x:LEFT + c, y:y + r * 2 + 1, w:1, h:1 });
-      }
       y += rowCount * 2;
     });
     var cols = LEFT + widest + 2;
@@ -410,8 +407,9 @@
   }
 
   function cloneLayout(l){ return JSON.parse(JSON.stringify(l)); }
+  // Drops stalls that no longer exist, and trees (no longer used on the market map; older saved maps may still have them).
   function withoutMissingStalls(l){
-    l.items = l.items.filter(function(it){ return it.kind !== 'stall' || stallById(it.stallId); });
+    l.items = l.items.filter(function(it){ return it.kind !== 'tree' && (it.kind !== 'stall' || stallById(it.stallId)); });
     return l;
   }
   function savedOrAutoLayout(){
@@ -2225,7 +2223,7 @@
     ['จัดการ', [['select','เลือก/ย้าย'], ['erase','เอาออก']]],
     ['ล็อก', [['stall','วางล็อก']]],
     ['จุดบริการ', [['entrance','ทางเข้า'], ['toilet','ห้องน้ำ'], ['parking','ที่จอดรถ']]],
-    ['ตกแต่งลาน', [['tree','ต้นไม้'], ['text','ป้าย'], ['stage','เวที'], ['object','สิ่งของ']]]
+    ['ตกแต่งลาน', [['text','ป้าย'], ['stage','เวที'], ['object','สิ่งของ']]]
   ];
   var MAP_SIZES = ['1x1','1x2','2x1','2x2'];
   var editMapCtrl = null;
