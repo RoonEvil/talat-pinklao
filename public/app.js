@@ -20,48 +20,48 @@
   function overlaps(aStart,aEnd,bStart,bEnd){ return aStart <= bEnd && aEnd >= bStart; }
   function sanitizeUsername(u){ return String(u||'').toLowerCase().replace(/[^a-z0-9_\-]/g,''); }
 
-  var ZONE_COLORS = ['var(--zone-1)','var(--zone-2)','var(--zone-3)','var(--zone-4)'];
+  // Zone colours are stored as keys ('zone-1' …) so light and dark themes can each pick their own shade.
+  var ZONE_COLOR_KEYS = ['zone-1','zone-2','zone-3','zone-4'];
 
-  var CATEGORIES = [
-    { id:'food', label:'อาหารและเครื่องดื่ม', icon:'🍜' },
-    { id:'clothing', label:'เสื้อผ้าและเครื่องประดับ', icon:'👕' },
-    { id:'general', label:'สินค้าทั่วไป', icon:'🧺' },
-    { id:'service', label:'บริการ', icon:'🔧' },
-    { id:'other', label:'อื่นๆ', icon:'📦' }
-  ];
-  function categoryMeta(id){ return CATEGORIES.find(function(c){ return c.id===id; }) || CATEGORIES[CATEGORIES.length-1]; }
-
-  // Food vendors also say what kind of food they sell. Keep ids in sync with FOOD_TYPE_IDS in server/routes/auth.js.
-  var FOOD_TYPES = [
-    { id:'ready_meal', label:'ข้าวแกง / อาหารปรุงสำเร็จ', icon:'🍛' },
-    { id:'made_to_order', label:'อาหารตามสั่ง / ก๋วยเตี๋ยว', icon:'🍜' },
-    { id:'grill_fried', label:'ปิ้งย่าง / ของทอด', icon:'🍢' },
-    { id:'dessert', label:'ขนมไทย / ของหวาน', icon:'🍡' },
-    { id:'bakery', label:'เบเกอรี่', icon:'🥐' },
-    { id:'drink', label:'เครื่องดื่ม', icon:'🥤' },
-    { id:'fruit', label:'ผลไม้', icon:'🍉' },
-    { id:'fresh', label:'อาหารสด (ผัก เนื้อ ปลา)', icon:'🥬' }
-  ];
-  function foodTypeLabel(id){ var f = FOOD_TYPES.find(function(x){ return x.id===id; }); return f ? f.label : id; }
-  // Goods a zone accepts (same rules as server/goods.js): 'clothing', 'food' (any food) or 'food:drink'; empty = anything.
-  function zoneAllowed(zone){
-    return zone && zone.allowed_goods ? String(zone.allowed_goods).split(',').filter(Boolean) : [];
+  // Goods come from the categories table (D3): top-level categories, and kinds under some of them
+  // (e.g. kinds of food). CATEGORIES holds the top level; KINDS[parentId] the kinds under a category.
+  var CATEGORY_ICONS = {
+    'อาหารและเครื่องดื่ม':'🍜', 'เสื้อผ้าและเครื่องประดับ':'👕', 'สินค้าทั่วไป':'🧺', 'บริการ':'🔧', 'อื่นๆ':'📦',
+    'ข้าวแกง / อาหารปรุงสำเร็จ':'🍛', 'อาหารตามสั่ง / ก๋วยเตี๋ยว':'🍜', 'ปิ้งย่าง / ของทอด':'🍢', 'ขนมไทย / ของหวาน':'🍡',
+    'เบเกอรี่':'🥐', 'เครื่องดื่ม':'🥤', 'ผลไม้':'🍉', 'อาหารสด (ผัก เนื้อ ปลา)':'🥬'
+  };
+  var CATEGORIES = [], KINDS = {}, CATEGORY_ROWS = [];
+  function setCategories(rows){
+    CATEGORY_ROWS = rows || [];
+    var meta = function(r){ return { id:r.id, label:r.name, icon:CATEGORY_ICONS[r.name] || (r.parentId ? '•' : '📦'), parentId:r.parentId || null }; };
+    CATEGORIES = CATEGORY_ROWS.filter(function(r){ return !r.parentId; }).map(meta);
+    KINDS = {};
+    CATEGORY_ROWS.filter(function(r){ return r.parentId; }).forEach(function(r){ (KINDS[r.parentId] = KINDS[r.parentId] || []).push(meta(r)); });
   }
+  var NO_CATEGORY = { id:null, label:'ไม่ระบุ', icon:'📦' };
+  function categoryMeta(id){ return CATEGORIES.find(function(c){ return String(c.id)===String(id); }) || NO_CATEGORY; }
+  function kindsOf(catId){ return KINDS[catId] || []; }
+  function hasKinds(catId){ return kindsOf(catId).length > 0; }
+  function kindMeta(id){
+    for (var k in KINDS){ var f = KINDS[k].find(function(x){ return String(x.id)===String(id); }); if (f) return f; }
+    return null;
+  }
+  function foodTypeLabel(id){ var f = kindMeta(id); return f ? f.label : ''; }
+  function anyCategoryLabel(id){ var k = kindMeta(id); return k ? k.label : categoryMeta(id).label; }
+  // Goods a zone accepts (same rules as server/goods.js): a list of category or kind ids; empty = anything.
+  function zoneAllowed(zone){ return zone && Array.isArray(zone.allowed) ? zone.allowed : []; }
   function zoneAllowsCategory(zone, catId){
-    var a = zoneAllowed(zone);
-    if (!a.length) return true;
-    if (catId === 'food') return a.some(function(x){ return x === 'food' || x.indexOf('food:') === 0; });
-    return a.indexOf(catId) !== -1;
+    var a = zoneAllowed(zone).map(String);
+    if (!a.length || a.indexOf(String(catId)) !== -1) return true;
+    return kindsOf(catId).some(function(k){ return a.indexOf(String(k.id)) !== -1; });
   }
-  function zoneAllowsFood(zone, foodId){
-    var a = zoneAllowed(zone);
-    return !a.length || a.indexOf('food') !== -1 || a.indexOf('food:' + foodId) !== -1;
+  function zoneAllowsFood(zone, kindId){
+    var a = zoneAllowed(zone).map(String);
+    if (!a.length || a.indexOf(String(kindId)) !== -1) return true;
+    var k = kindMeta(kindId);
+    return !!(k && a.indexOf(String(k.parentId)) !== -1);
   }
-  function zoneAllowedLabel(zone){
-    return zoneAllowed(zone).map(function(x){
-      return x.indexOf('food:') === 0 ? foodTypeLabel(x.slice(5)) : categoryMeta(x).label;
-    }).join(', ');
-  }
+  function zoneAllowedLabel(zone){ return zoneAllowed(zone).map(anyCategoryLabel).join(', '); }
   // Zone key under the map: colour, what the zone accepts and how many stalls are free.
   function zoneRulesHtml(){
     var items = state.zones.map(function(z){
@@ -80,9 +80,10 @@
 
   var PAYMENT_METHODS = [
     { id:'promptpay', label:'โอนผ่านพร้อมเพย์' },
-    { id:'bank', label:'โอนผ่านธนาคาร' },
+    { id:'transfer', label:'โอนผ่านธนาคาร' },
     { id:'cash', label:'เงินสดที่สำนักงานตลาด' }
   ];
+  function methodLabel(id){ var m = PAYMENT_METHODS.find(function(x){ return x.id===id; }); return m ? m.label : (id || '—'); }
 
   var ANNOUNCE_TYPES = [
     { id:'news', label:'ข่าวสาร' },
@@ -94,10 +95,12 @@
 
   var STATUS_LABELS = { pending:'รอดำเนินการ', approved:'อนุมัติแล้ว', rejected:'ปฏิเสธแล้ว', cancelled:'ยกเลิกแล้ว' };
   function statusLabel(s){ return STATUS_LABELS[s] || s; }
-  var PAY_STATUS_LABELS = { unpaid:'ยังไม่ชำระ', paid:'ชำระแล้ว', confirmed:'ยืนยันแล้ว' };
+  var PAY_STATUS_LABELS = { unpaid:'ยังไม่ชำระ', paid:'แจ้งชำระแล้ว', confirmed:'ยืนยันรับเงินแล้ว' };
   function payStatusLabel(s){ return PAY_STATUS_LABELS[s] || s; }
-  var RATE_LABELS = { guest:'ทั่วไป', regular:'สมาชิก' };
+  var RATE_LABELS = { walkin:'ขาจร', regular:'ขาประจำ' };
   function rateLabel(s){ return RATE_LABELS[s] || s; }
+  var ROLE = { ADMIN:1, STAFF:2, VENDOR:3 };
+  var ROLE_LABELS = { 1:'ผู้ดูแลระบบ', 2:'เจ้าหน้าที่ตลาด', 3:'ผู้ค้า' };
 
   // ---------- API ----------
   var authToken = null;
@@ -132,14 +135,34 @@
       var raw = localStorage.getItem('pinklao_profile');
       if (raw) return JSON.parse(raw);
     } catch(e){}
-    var p = { vendorToken: uid(), vendorName:'', vendorPhone:'', isRegistered:false, isAdmin:false, isHeadAdmin:false, adminName:'', adminUsername:'' };
+    var p = blankProfile();
     try { localStorage.setItem('pinklao_profile', JSON.stringify(p)); } catch(e){}
     return p;
   })();
+  function blankProfile(){
+    return { vendorToken: uid(), vendorName:'', vendorPhone:'', isRegistered:false, isAdmin:false, isHeadAdmin:false,
+      userId:null, roleId:null, menus:[], adminName:'', category:null, foodType:null, user:null };
+  }
   function saveProfile(){ try { localStorage.setItem('pinklao_profile', JSON.stringify(profile)); } catch(e){} }
 
+  // Copies the signed-in user (from /api/auth/login, /register or /me) into this browser's profile.
+  function applySessionUser(u){
+    var keepToken = profile.vendorToken && profile.vendorToken.length >= 8 && !profile.isRegistered ? profile.vendorToken : uid();
+    var staff = u.roleId !== ROLE.VENDOR;
+    profile = Object.assign(blankProfile(), {
+      vendorToken: keepToken,
+      userId: u.id, roleId: u.roleId, user: u,
+      isAdmin: staff, isHeadAdmin: u.roleId === ROLE.ADMIN, menus: staff ? (u.menus || []) : [],
+      adminName: staff ? u.name : '',
+      isRegistered: !staff, vendorName: staff ? '' : u.name, vendorPhone: staff ? '' : u.phone,
+      category: staff ? null : u.category, foodType: staff ? null : u.foodType
+    });
+    saveProfile();
+  }
+  function canMenu(key){ return profile.isAdmin && (profile.menus || []).indexOf(key) !== -1; }
+
   function signOutCompletely(){
-    profile = { vendorToken: uid(), vendorName:'', vendorPhone:'', isRegistered:false, isAdmin:false, isHeadAdmin:false, adminName:'', adminUsername:'' };
+    profile = blankProfile();
     saveProfile();
     saveToken(null);
   }
@@ -147,9 +170,9 @@
   // ---------- state ----------
   var state = {
     zones: [], stalls: [], activeBookings: [], bookings: [], myBookings: [], myBookingsLoaded:false,
-    vendors: [], announcements: [], auditLogs: [], auditDate: null, admins: [], settings: {},
-    activeTab: 'map', adminSection: 'approvals', loaded:false,
-    bookingsFilter: 'all',
+    vendors: [], users: [], roles: [], announcements: [], auditLogs: [], auditDate: null, settings: {},
+    activeTab: 'map', adminMenu: 'bookings', adminTabs: {}, loaded:false,
+    bookingsFilter: 'all', myFilter: 'all', userQuery: '', fineQuery: '', annQuery: '', zoneQuery: '', stallQuery: '', bookingQuery: '', payQuery: '',
     mapView: { s:1, tx:0, ty:0, fitted:false }, mapHighlight: null, mapInteracting: false,
     editView: { s:1, tx:0, ty:0, fitted:false }, mapDraft: null, mapDirty: false,
     mapTool: 'select', mapSelected: -1, mapPlaceStall: null, mapPlaceSize: '1x1',
@@ -247,13 +270,14 @@
   function loadPublicData(){
     return Promise.all([
       apiGet('/api/zones'), apiGet('/api/stalls'), apiGet('/api/bookings/active'),
-      apiGet('/api/announcements'), apiGet('/api/settings')
+      apiGet('/api/announcements'), apiGet('/api/settings'), apiGet('/api/categories')
     ]).then(function(res){
       state.zones = res[0];
       state.stalls = res[1];
       state.activeBookings = res[2];
       state.announcements = res[3];
       state.settings = res[4];
+      setCategories(res[5]);
       state.loaded = true;
       render();
       queueNewAnnouncements(state.announcements);
@@ -273,45 +297,73 @@
       .catch(function(err){ handleAuthError(err); });
   }
   function loadVendors(){
-    return apiGet('/api/vendors').then(function(rows){ state.vendors = rows; render(); })
+    return apiGet('/api/users?role=3').then(function(rows){ state.vendors = rows; render(); })
       .catch(function(err){ handleAuthError(err); });
   }
-  function loadAdmins(){
-    return apiGet('/api/admins').then(function(rows){ state.admins = rows; render(); })
+  function loadUsers(){
+    return apiGet('/api/users').then(function(rows){ state.users = rows; state.vendors = rows.filter(function(u){ return u.roleId === ROLE.VENDOR; }); render(); })
+      .catch(function(err){ handleAuthError(err); });
+  }
+  function loadRoles(){
+    return apiGet('/api/roles').then(function(rows){ state.roles = rows; render(); })
       .catch(function(err){ handleAuthError(err); });
   }
   function loadAudit(date){
-    return apiGet('/api/audit?date=' + encodeURIComponent(date)).then(function(res){
+    return apiGet('/api/inspections?date=' + encodeURIComponent(date)).then(function(res){
       state.auditDate = res.date;
       state.auditBookings = res.bookings;
       render();
     }).catch(function(err){ handleAuthError(err); });
   }
   function loadFines(){
-    return apiGet('/api/audit/fines').then(function(rows){ state.auditLogs = rows; render(); })
+    return apiGet('/api/inspections/fines').then(function(rows){ state.auditLogs = rows; render(); })
       .catch(function(err){ handleAuthError(err); });
   }
   function handleAuthError(err){
     if (err && err.status === 401){
       toast('เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่', true);
-      profile.isAdmin = false; profile.isHeadAdmin = false; saveProfile(); saveToken(null);
-      if (state.activeTab==='admin') setTab('map');
+      signOutCompletely();
+      if (state.activeTab==='admin') state.activeTab = 'map';
       render();
     } else {
       console.error(err);
     }
   }
 
+  // Data each staff menu works with; reloaded when the menu opens and every 10 seconds.
   function refreshAdminData(){
     if (!profile.isAdmin) return;
-    if (['approvals','bookings','summary'].indexOf(state.adminSection) !== -1) loadAdminBookings();
-    if (state.adminSection==='vendors' || state.adminSection==='walkin') loadVendors();
-    if (state.adminSection==='admins' && profile.isHeadAdmin) loadAdmins();
-    if (state.adminSection==='audit') { loadAdminBookings(); loadAudit(state.auditDate || todayStr()); loadFines(); }
+    var m = state.adminMenu;
+    if (['bookings','payments','reports','users'].indexOf(m) !== -1) loadAdminBookings();
+    if (m === 'users') loadUsers();
+    if (m === 'bookings' && adminTab('bookings') === 'walkin') loadVendors();
+    if (m === 'settings') loadRoles();
+    if (m === 'inspections') { loadAudit(state.auditDate || todayStr()); loadFines(); }
+  }
+
+  // Re-reads the signed-in account, so a suspended account or changed permissions take effect without signing in again.
+  function refreshSession(){
+    if (!authToken) return Promise.resolve();
+    return apiGet('/api/auth/me').then(function(u){
+      var wasStaff = profile.isAdmin;
+      applySessionUser(u);
+      if (profile.isAdmin && !wasStaff) state.activeTab = 'admin';
+      render();
+    }).catch(function(err){
+      if (err && (err.status === 401 || err.status === 403)){
+        signOutCompletely();
+        state.activeTab = 'map';
+        toast('กรุณาเข้าสู่ระบบใหม่', true);
+        render();
+      }
+    });
   }
 
   // ---------- render: shell ----------
   function render(){
+    // Staff work only in "ระบบจัดการข้อมูล"; the vendor tabs are hidden for them.
+    if (profile.isAdmin && state.activeTab !== 'admin') state.activeTab = 'admin';
+    if (!profile.isAdmin && state.activeTab === 'admin') state.activeTab = 'map';
     renderRoleArea();
     renderTabs();
     if (state.activeTab==='map') renderMap();
@@ -319,44 +371,43 @@
     if (state.activeTab==='admin') renderAdmin();
   }
 
+  function logout(){
+    signOutCompletely();
+    state.myBookings = []; state.bookings = []; state.users = []; state.vendors = []; state.auditLogs = []; state.finesLoaded = false;
+    state.activeTab = 'map';
+    toast('ออกจากระบบแล้ว');
+    render();
+    loadMyBookings();
+  }
+
   function renderRoleArea(){
     var el = document.getElementById('roleArea');
     if (profile.isAdmin){
       el.innerHTML =
-        '<span class="pill on-accent">'+esc(profile.adminName||'แอดมิน')+' · '+(profile.isHeadAdmin?'แอดมินใหญ่':'เจ้าหน้าที่')+'</span>' +
+        '<span class="pill on-accent">'+esc(profile.adminName||'เจ้าหน้าที่')+' · '+esc(ROLE_LABELS[profile.roleId]||'')+'</span>' +
+        '<button class="btn ghost small" id="profileBtn">ข้อมูลส่วนตัว</button>' +
         '<button class="btn ghost small" id="logoutBtn">ออกจากระบบ</button>';
-      document.getElementById('logoutBtn').onclick = function(){
-        signOutCompletely();
-        state.myBookings = [];
-        if (state.activeTab==='admin') setTab('map');
-        toast('ออกจากระบบแล้ว');
-        render();
-        loadMyBookings();
-      };
     } else if (profile.isRegistered){
       el.innerHTML =
-        '<span class="pill on-primary">'+esc(profile.vendorName||'บัญชีของฉัน')+'</span>' +
-        '<button class="btn ghost small" id="vendorLogoutBtn">ออกจากระบบ</button>';
-      document.getElementById('vendorLogoutBtn').onclick = function(){
-        signOutCompletely();
-        if (state.activeTab==='mine') setTab('map');
-        toast('ออกจากระบบแล้ว');
-        render();
-        loadMyBookings();
-      };
+        '<span class="pill on-primary">ผู้ค้า: '+esc(profile.vendorName||'บัญชีของฉัน')+'</span>' +
+        '<button class="btn ghost small" id="profileBtn">ข้อมูลส่วนตัว</button>' +
+        '<button class="btn ghost small" id="logoutBtn">ออกจากระบบ</button>';
     } else {
       el.innerHTML =
-        (profile.vendorName ? '<span class="pill on-primary">ผู้ขาย: '+esc(profile.vendorName)+'</span>' : '<span class="pill">กำลังเรียกดูแบบผู้เยี่ยมชม</span>') +
+        (profile.vendorName ? '<span class="pill on-primary">ผู้ค้า: '+esc(profile.vendorName)+'</span>' : '<span class="pill">กำลังเรียกดูแบบผู้เยี่ยมชม</span>') +
         '<button class="btn ghost small" id="staffBtn">เข้าสู่ระบบ</button>';
       document.getElementById('staffBtn').onclick = function(){ openAuthModal('login'); };
+      return;
     }
+    document.getElementById('logoutBtn').onclick = logout;
+    document.getElementById('profileBtn').onclick = openProfileModal;
   }
 
   function renderTabs(){
     document.querySelectorAll('.tab').forEach(function(btn){
       btn.classList.toggle('active', btn.dataset.tab===state.activeTab);
     });
-    document.getElementById('adminTabBtn').hidden = !profile.isAdmin;
+    document.getElementById('tabs').hidden = profile.isAdmin;
     document.getElementById('view-map').hidden = state.activeTab!=='map';
     document.getElementById('view-mine').hidden = state.activeTab!=='mine';
     document.getElementById('view-admin').hidden = state.activeTab!=='admin';
@@ -378,7 +429,8 @@
   var STALL_STATUS_COLORS = { available:'var(--success)', pending:'var(--warning)', occupied:'var(--danger)', inactive:'var(--muted)' };
   var MAP_KIND_LABELS = { stall:'ล็อก', entrance:'ทางเข้า', toilet:'ห้องน้ำ', tree:'ต้นไม้', stage:'เวที', parking:'ที่จอดรถ', text:'ป้าย', object:'สิ่งของ' };
 
-  function byRowCol(a, b){ return (a.pos_row||0)-(b.pos_row||0) || (a.pos_col||0)-(b.pos_col||0) || a.id-b.id; }
+  // Stalls in creation order (mirrors server/neighbors.js autoLayoutStalls).
+  function byRowCol(a, b){ return a.id - b.id; }
 
   function autoLayout(){
     var LEFT = 3;
@@ -415,7 +467,7 @@
   function savedOrAutoLayout(){
     return withoutMissingStalls(cloneLayout(state.settings.mapLayout || autoLayout()));
   }
-  function zoneColor(z){ return ZONE_COLORS[((z && z.color_index) || 0) % 4]; }
+  function zoneColor(z){ return 'var(--' + (z && ZONE_COLOR_KEYS.indexOf(z.color) !== -1 ? z.color : 'zone-1') + ')'; }
 
   // Public map only: stalls the admin has not placed yet are added in blocks below the map, one per zone,
   // so vendors still see (and can book) every stall.
@@ -480,13 +532,14 @@
     if (!me) return [];
     return items.filter(function(it){ return it !== me && rectsTouch(me, it); }).map(function(it){ return String(it.stallId); });
   }
+  // Same as server/goods.js goodsKey: compare kinds when the category has kinds; "อื่นๆ" is too vague to compare.
   function goodsKey(category, foodType){
-    if (!category || category === 'other') return null;
-    if (category === 'food') return foodType ? 'food:' + foodType : null;
-    return category;
+    if (!category || categoryMeta(category).label === 'อื่นๆ') return null;
+    if (hasKinds(category)) return foodType ? 'k' + foodType : null;
+    return 'c' + category;
   }
   function goodsLabel(category, foodType){
-    return category === 'food' && foodType ? foodTypeLabel(foodType) : categoryMeta(category).label;
+    return foodType && kindMeta(foodType) ? foodTypeLabel(foodType) : categoryMeta(category).label;
   }
   function neighborClash(stallId, category, foodType, start, end){
     var key = goodsKey(category, foodType);
@@ -503,7 +556,7 @@
   }
   function foodOptionsHtml(choices, selected, placeholder){
     return (placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '') + choices.map(function(f){
-      return '<option value="'+f.id+'" '+(f.id===selected?'selected':'')+'>'+f.icon+' '+esc(f.label)+'</option>';
+      return '<option value="'+f.id+'" '+(String(f.id)===String(selected)?'selected':'')+'>'+f.icon+' '+esc(f.label)+'</option>';
     }).join('');
   }
 
@@ -693,31 +746,35 @@
 
   // Words people type when looking for a kind of stall. The longest matching word wins,
   // so "อาหารสด" finds fresh food rather than all food.
-  var GOODS_WORDS = [
-    { words:['อาหาร','ของกิน','กิน','food'], goods:{ category:'food' } },
-    { words:['เครื่องดื่ม','น้ำ','ดื่ม','กาแฟ','ชา','drink'], goods:{ category:'food', foodType:'drink' } },
-    { words:['ข้าวแกง','อาหารปรุงสำเร็จ','กับข้าว'], goods:{ category:'food', foodType:'ready_meal' } },
-    { words:['ตามสั่ง','ก๋วยเตี๋ยว','อาหารตามสั่ง'], goods:{ category:'food', foodType:'made_to_order' } },
-    { words:['ปิ้งย่าง','ของทอด','ทอด','ย่าง'], goods:{ category:'food', foodType:'grill_fried' } },
-    { words:['ขนม','ขนมไทย','ของหวาน','หวาน'], goods:{ category:'food', foodType:'dessert' } },
-    { words:['เบเกอรี่','ขนมปัง','เค้ก'], goods:{ category:'food', foodType:'bakery' } },
-    { words:['ผลไม้'], goods:{ category:'food', foodType:'fruit' } },
-    { words:['อาหารสด','ผัก','เนื้อ','ปลา','หมู','ไก่'], goods:{ category:'food', foodType:'fresh' } },
-    { words:['เสื้อผ้า','เสื้อ','กางเกง','เครื่องประดับ','แฟชั่น','รองเท้า','กระเป๋า'], goods:{ category:'clothing' } },
-    { words:['สินค้าทั่วไป','ทั่วไป','ของใช้','ของใช้ในบ้าน'], goods:{ category:'general' } },
-    { words:['บริการ'], goods:{ category:'service' } },
-    { words:['อื่นๆ','อื่น'], goods:{ category:'other' } }
-  ];
+  // Everyday words for the default categories (by name); any category name, or a word of it, also matches.
+  var GOODS_SYNONYMS = {
+    'อาหารและเครื่องดื่ม':['อาหาร','ของกิน','กิน','food'],
+    'เครื่องดื่ม':['เครื่องดื่ม','น้ำ','ดื่ม','กาแฟ','ชา','drink'],
+    'ข้าวแกง / อาหารปรุงสำเร็จ':['ข้าวแกง','อาหารปรุงสำเร็จ','กับข้าว'],
+    'อาหารตามสั่ง / ก๋วยเตี๋ยว':['ตามสั่ง','ก๋วยเตี๋ยว','อาหารตามสั่ง'],
+    'ปิ้งย่าง / ของทอด':['ปิ้งย่าง','ของทอด','ทอด','ย่าง'],
+    'ขนมไทย / ของหวาน':['ขนม','ขนมไทย','ของหวาน','หวาน'],
+    'เบเกอรี่':['เบเกอรี่','ขนมปัง','เค้ก'],
+    'ผลไม้':['ผลไม้'],
+    'อาหารสด (ผัก เนื้อ ปลา)':['อาหารสด','ผัก','เนื้อ','ปลา','หมู','ไก่'],
+    'เสื้อผ้าและเครื่องประดับ':['เสื้อผ้า','เสื้อ','กางเกง','เครื่องประดับ','แฟชั่น','รองเท้า','กระเป๋า'],
+    'สินค้าทั่วไป':['สินค้าทั่วไป','ทั่วไป','ของใช้','ของใช้ในบ้าน'],
+    'บริการ':['บริการ'],
+    'อื่นๆ':['อื่นๆ','อื่น']
+  };
+  // The longest matching word wins, so "อาหารสด" finds fresh food rather than all food.
   function goodsFromQuery(q){
     var best = null, bestLen = 0;
-    GOODS_WORDS.forEach(function(g){
-      g.words.forEach(function(w){
-        if (q.indexOf(w) !== -1 && w.length > bestLen){ best = g.goods; bestLen = w.length; }
+    CATEGORY_ROWS.forEach(function(r){
+      var words = (GOODS_SYNONYMS[r.name] || []).concat([r.name.toLowerCase()], r.name.toLowerCase().split(/\s*[\/()]\s*|\s+/));
+      words.forEach(function(w){
+        if (w && w.length >= 2 && q.indexOf(w) !== -1 && w.length > bestLen){ best = r; bestLen = w.length; }
       });
     });
     if (!best) return null;
-    var label = best.category === 'food' && best.foodType ? foodTypeLabel(best.foodType) : categoryMeta(best.category).label;
-    return { category: best.category, foodType: best.foodType || null, label: label };
+    return best.parentId
+      ? { category: best.parentId, foodType: best.id, label: best.name }
+      : { category: best.id, foodType: null, label: best.name };
   }
   function freeStallsForGoods(goods){
     return state.stalls.filter(function(s){
@@ -771,14 +828,16 @@
     var minDate = todayStr();
     var isRegistered = profile.isRegistered;
     var regularRate = stall.regular_price_per_day != null ? stall.regular_price_per_day : stall.price_per_day;
-    // A registered account picks only from the goods it signed up to sell (the server checks this too).
-    var allowedCats = isRegistered && profile.categories && profile.categories.length ? profile.categories : null;
-    // ...and only goods this stall's zone accepts (e.g. a drinks-only row).
-    var allowedFoods = isRegistered && profile.foodTypes && profile.foodTypes.length ? profile.foodTypes : null;
-    var foodChoices = (allowedFoods ? FOOD_TYPES.filter(function(f){ return allowedFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES)
-      .filter(function(f){ return zoneAllowsFood(zone, f.id); });
-    var catChoices = (allowedCats ? CATEGORIES.filter(function(c){ return allowedCats.indexOf(c.id) !== -1; }) : CATEGORIES)
-      .filter(function(c){ return zoneAllowsCategory(zone, c.id) && (c.id !== 'food' || foodChoices.length); });
+    // A registered account picks only the goods it signed up to sell (the server checks this too),
+    // and only goods this stall's zone accepts (e.g. a drinks-only row).
+    var myCat = isRegistered && profile.category ? String(profile.category) : null;
+    var myKind = isRegistered && profile.foodType ? String(profile.foodType) : null;
+    var kindChoicesFor = function(catId){
+      return kindsOf(catId).filter(function(f){ return (!myKind || String(f.id) === myKind) && zoneAllowsFood(zone, f.id); });
+    };
+    var catChoices = CATEGORIES.filter(function(c){
+      return (!myCat || String(c.id) === myCat) && zoneAllowsCategory(zone, c.id) && (!hasKinds(c.id) || kindChoicesFor(c.id).length);
+    });
     var zoneRule = zoneAllowed(zone).length ? zoneAllowedLabel(zone) : '';
     if (!catChoices.length){
       root.innerHTML =
@@ -794,41 +853,49 @@
     }
     // Auto-fill from what this vendor did last time: remembered in this browser, or their latest booking.
     var prev = lastBookingChoices();
-    var inChoices = function(id){ return catChoices.some(function(c){ return c.id === id; }); };
+    var inChoices = function(id){ return id != null && catChoices.some(function(c){ return String(c.id) === String(id); }); };
     // Goods the vendor searched for on the map come first.
     var hint = goodsHint || {};
-    var myCategory = hint.category && inChoices(hint.category) ? hint.category :
-      prev.category && inChoices(prev.category) ? prev.category :
-      (inChoices(stall.category || 'other') ? (stall.category || 'other') : catChoices[0].id);
+    var myCategory = inChoices(hint.category) ? hint.category : inChoices(prev.category) ? prev.category : catChoices[0].id;
     var autoFilled = !!(prev.category || prev.days || prev.note) || !!(profile.vendorName || profile.vendorPhone);
     var endDefault = prev.days > 1 ? addDaysIso(minDate, prev.days - 1) : minDate;
 
     var catOptions = catChoices.map(function(c){
-      return '<option value="'+c.id+'" '+(c.id===myCategory?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
+      return '<option value="'+c.id+'" '+(String(c.id)===String(myCategory)?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
-    var foodPick = foodChoices.length === 1 ? foodChoices[0].id :
-      hint.foodType && foodChoices.some(function(f){ return f.id === hint.foodType; }) ? hint.foodType :
-      (prev.foodType && foodChoices.some(function(f){ return f.id === prev.foodType; }) ? prev.foodType : '');
-    var foodOptions = foodOptionsHtml(foodChoices, foodPick, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —');
+    var kindPick = function(catId){
+      var list = kindChoicesFor(catId);
+      var has = function(id){ return id != null && list.some(function(f){ return String(f.id) === String(id); }); };
+      return list.length === 1 ? list[0].id : has(hint.foodType) ? hint.foodType : has(prev.foodType) ? prev.foodType : '';
+    };
+    var kindOptions = function(catId){
+      var list = kindChoicesFor(catId);
+      return foodOptionsHtml(list, kindPick(catId), list.length === 1 ? null : '— เลือกชนิดสินค้า —');
+    };
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
       '<h3>จองล็อก '+esc(stall.code)+'</h3>' +
-      '<div class="sub">'+esc(zone?zone.name:'')+' · ราคาทั่วไป '+fmtMoney(stall.price_per_day)+'/วัน · ราคาสมาชิก '+fmtMoney(regularRate)+'/วัน</div>' +
+      '<div class="sub">'+esc(zone?zone.name:'')+' · ราคาขาจร '+fmtMoney(stall.price_per_day)+'/วัน · ราคาขาประจำ '+fmtMoney(regularRate)+'/วัน</div>' +
       (zoneRule ? '<p class="zone-rule">โซนนี้รับเฉพาะ: <b>'+esc(zoneRule)+'</b></p>' : '') +
       (autoFilled ? '<p class="autofill-note" id="bfAutoNote">✨ กรอกข้อมูลจากการจองครั้งก่อนให้แล้ว ตรวจสอบแล้วกดส่งคำขอได้เลย <button type="button" class="link-btn" id="bfClearAuto">ล้างข้อมูล</button></p>' : '') +
       '<form id="bookForm" autocomplete="on">' +
-        '<div class="field"><label for="bfName">ชื่อผู้ขาย</label><input id="bfName" name="name" autocomplete="name" required value="'+esc(profile.vendorName)+'"></div>' +
-        '<div class="field"><label for="bfPhone">เบอร์โทรศัพท์</label><input id="bfPhone" name="tel" type="tel" inputmode="tel" autocomplete="tel" required value="'+esc(profile.vendorPhone)+'" placeholder="08X-XXX-XXXX"></div>' +
-        '<div class="field"><label for="bfCat">คุณขายอะไร?</label><select id="bfCat">'+catOptions+'</select></div>' +
-        '<div class="field" id="bfFoodWrap" hidden><label for="bfFood">ประเภทอาหาร</label><select id="bfFood">'+foodOptions+'</select></div>' +
+        (isRegistered
+          ? '<p class="muted small" style="margin:0 0 10px">จองในชื่อ <b>'+esc(profile.vendorName)+'</b> · '+esc(profile.vendorPhone)+'</p>'
+          : '<div class="field"><label for="bfName">ชื่อ-นามสกุลผู้ค้า</label><input id="bfName" name="name" autocomplete="name" required value="'+esc(profile.vendorName)+'"></div>' +
+            '<div class="field"><label for="bfPhone">เบอร์โทรศัพท์</label><input id="bfPhone" name="tel" type="tel" inputmode="tel" autocomplete="tel" required value="'+esc(profile.vendorPhone)+'" placeholder="08XXXXXXXX"></div>') +
+        '<div class="field"><label for="bfCat">ประเภทสินค้า</label><select id="bfCat">'+catOptions+'</select></div>' +
+        '<div class="field" id="bfFoodWrap" hidden><label for="bfFood">ชนิดสินค้า</label><select id="bfFood">'+kindOptions(myCategory)+'</select></div>' +
         '<div class="field-row">' +
           '<div class="field"><label for="bfStart">วันที่เริ่ม</label><input type="date" id="bfStart" required min="'+minDate+'" value="'+minDate+'"></div>' +
           '<div class="field"><label for="bfEnd">วันที่สิ้นสุด</label><input type="date" id="bfEnd" required min="'+minDate+'" value="'+endDefault+'"></div>' +
         '</div>' +
         '<div class="clash-note" id="bfClash" role="alert" hidden></div>' +
         '<div class="field"><label for="bfNote">ข้อความถึงเจ้าหน้าที่ตลาด (ถ้ามี)</label><textarea id="bfNote" rows="2" placeholder="เช่น ขายลูกชิ้นปิ้ง ต้องการปลั๊กไฟ">'+esc(prev.note || '')+'</textarea></div>' +
-        '<p class="deposit-note">ยังไม่ต้องจ่ายเงินตอนนี้ — เมื่อเจ้าหน้าที่อนุมัติแล้ว ปุ่ม "ชำระเงิน" จะขึ้นในหน้า "การจองของฉัน" '+(isRegistered?'':'สมาชิกที่ลงทะเบียน/ลูกค้าประจำจะได้ราคาพิเศษโดยอัตโนมัติ')+'</p>' +
+        '<p class="deposit-note" id="bfTotal"></p>' +
+        '<p class="deposit-note">ยังไม่ต้องจ่ายเงินตอนนี้ — เมื่อเจ้าหน้าที่ตลาดอนุมัติแล้ว ปุ่ม "ชำระเงิน" จะขึ้นในหน้า "การจองของฉัน" ผู้ค้าขาประจำได้ราคาขาประจำโดยอัตโนมัติ</p>' +
+        (isRegistered ? '' : '<label class="checkline consent"><input type="checkbox" id="bfConsent"' + (profile.consent ? ' checked' : '') + '> ' +
+          'ยินยอมให้ตลาดเก็บชื่อและเบอร์โทรศัพท์ เพื่อใช้ติดต่อเรื่องการจองเท่านั้น (พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล)</label>') +
         '<div class="form-error" id="bfErr"></div>' +
         '<div class="form-actions">' +
           '<button type="button" class="btn ghost" id="bfCancel">ยกเลิก</button>' +
@@ -844,15 +911,21 @@
     var startEl = document.getElementById('bfStart'), endEl = document.getElementById('bfEnd');
     var clashEl = document.getElementById('bfClash');
     var submitBtn = root.querySelector('#bookForm button[type=submit]');
+    var rateNow = profile.isRegistered && profile.user && profile.user.isRegular ? regularRate : stall.price_per_day;
     var syncGoods = function(){
-      var isFood = catSel.value === 'food';
-      document.getElementById('bfFoodWrap').hidden = !isFood;
-      var clash = neighborClash(stall.id, catSel.value, isFood ? foodSel.value : null, startEl.value, endEl.value);
+      var withKinds = hasKinds(catSel.value);
+      document.getElementById('bfFoodWrap').hidden = !withKinds;
+      var clash = neighborClash(stall.id, catSel.value, withKinds ? foodSel.value : null, startEl.value, endEl.value);
       clashEl.hidden = !clash;
       clashEl.textContent = clash || '';
       submitBtn.disabled = !!clash;
+      var days = startEl.value && endEl.value && endEl.value >= startEl.value ? daysInclusive(startEl.value, endEl.value) : 0;
+      document.getElementById('bfTotal').innerHTML = days
+        ? 'ยอดเงินรวม ' + fmtMoney(rateNow) + ' × ' + days + ' วัน = <strong>' + fmtMoney(rateNow * days) + '</strong>'
+        : '';
     };
-    [catSel, foodSel, startEl, endEl].forEach(function(el){ el.addEventListener('change', syncGoods); });
+    catSel.addEventListener('change', function(){ foodSel.innerHTML = kindOptions(catSel.value); syncGoods(); });
+    [foodSel, startEl, endEl].forEach(function(el){ el.addEventListener('change', syncGoods); });
     // Moving the start date keeps the same number of days; the end date never falls before the start.
     var lastStart = startEl.value;
     startEl.addEventListener('change', function(){
@@ -868,8 +941,10 @@
     var clearBtn = document.getElementById('bfClearAuto');
     if (clearBtn) clearBtn.onclick = function(){
       if (!isRegistered){ document.getElementById('bfName').value = ''; document.getElementById('bfPhone').value = ''; }
-      catSel.value = catChoices.some(function(c){ return c.id === (stall.category || 'other'); }) ? (stall.category || 'other') : catChoices[0].id;
-      foodSel.value = foodChoices.length === 1 ? foodChoices[0].id : '';
+      catSel.value = catChoices[0].id;
+      foodSel.innerHTML = kindOptions(catSel.value);
+      var only = kindChoicesFor(catSel.value);
+      foodSel.value = only.length === 1 ? only[0].id : '';
       startEl.value = minDate; endEl.value = minDate; lastStart = minDate;
       document.getElementById('bfNote').value = '';
       document.getElementById('bfAutoNote').hidden = true;
@@ -878,25 +953,27 @@
     syncGoods();
     document.getElementById('bookForm').addEventListener('submit', function(e){
       e.preventDefault();
-      var name = document.getElementById('bfName').value.trim();
-      var phone = document.getElementById('bfPhone').value.trim();
-      var category = catSel.value;
-      var foodType = category === 'food' ? foodSel.value : null;
+      var name = isRegistered ? profile.vendorName : document.getElementById('bfName').value.trim();
+      var phone = isRegistered ? profile.vendorPhone : document.getElementById('bfPhone').value.trim();
+      var consent = isRegistered || document.getElementById('bfConsent').checked;
+      var category = Number(catSel.value);
+      var foodType = hasKinds(category) ? Number(foodSel.value) || null : null;
       var start = startEl.value;
       var end = endEl.value;
       var note = document.getElementById('bfNote').value.trim();
       var errEl = document.getElementById('bfErr');
       if (!name || !phone || !start || !end){ errEl.textContent = 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ'; return; }
       if (end < start){ errEl.textContent = 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม'; return; }
-      if (category === 'food' && !foodType){ errEl.textContent = 'กรุณาเลือกประเภทอาหาร'; return; }
+      if (hasKinds(category) && !foodType){ errEl.textContent = 'กรุณาเลือกชนิดสินค้า'; return; }
+      if (!consent){ errEl.textContent = 'กรุณาติ๊กยินยอมให้เก็บชื่อและเบอร์โทรศัพท์ก่อนส่งคำขอ'; return; }
 
-      profile.vendorName = name; profile.vendorPhone = phone;
+      if (!isRegistered){ profile.vendorName = name; profile.vendorPhone = phone; profile.consent = true; }
       profile.lastBooking = { category: category, foodType: foodType, days: daysInclusive(start, end), note: note };
       saveProfile();
       submitBtn.disabled = true;
 
       apiPost('/api/bookings', {
-        stallId: stall.id, vendorToken: profile.vendorToken, vendorName: name, vendorPhone: phone,
+        stallId: stall.id, vendorToken: profile.vendorToken, vendorName: name, vendorPhone: phone, consent: true,
         category: category, foodType: foodType, startDate: start, endDate: end, note: note || null
       }).then(function(){
         toast('ส่งคำขอจองล็อก ' + stall.code + ' แล้ว');
@@ -955,6 +1032,39 @@
     });
   }
 
+  // Radio chips for one goods category, plus its kinds when it has them (registration and the user form).
+  function goodsPickerHtml(prefix, cat, kind){
+    var cats = CATEGORIES.map(function(c){
+      return '<label class="check-chip"><input type="radio" name="'+prefix+'Cat" value="'+c.id+'"'+(String(c.id)===String(cat)?' checked':'')+'>'+c.icon+' '+esc(c.label)+'</label>';
+    }).join('');
+    var kinds = CATEGORIES.filter(function(c){ return hasKinds(c.id); }).map(function(c){
+      return '<div class="field food-types" data-kindsof="'+c.id+'"'+(String(c.id)===String(cat)?'':' hidden')+'>' +
+        '<span class="field-label">ชนิดของ'+esc(c.label)+' <span class="muted">(เลือก 1 ชนิด)</span></span><div class="check-grid">' +
+        kindsOf(c.id).map(function(f){
+          return '<label class="check-chip"><input type="radio" name="'+prefix+'Kind" value="'+f.id+'"'+(String(f.id)===String(kind)?' checked':'')+'>'+f.icon+' '+esc(f.label)+'</label>';
+        }).join('') + '</div></div>';
+    }).join('');
+    return '<div class="field"><span class="field-label">ประเภทสินค้าที่ขาย <span class="muted">(เลือก 1 ประเภท)</span></span>' +
+      '<div class="check-grid" role="radiogroup">'+cats+'</div></div>' + kinds;
+  }
+  function bindGoodsPicker(root, prefix){
+    root.querySelectorAll('input[name="'+prefix+'Cat"]').forEach(function(radio){
+      radio.addEventListener('change', function(){
+        root.querySelectorAll('[data-kindsof]').forEach(function(box){ box.hidden = box.dataset.kindsof !== radio.value; });
+      });
+    });
+  }
+  function readGoodsPicker(root, prefix){
+    var cat = checkedValues(root, prefix + 'Cat')[0];
+    if (!cat) return { category: null, foodType: null };
+    var kind = hasKinds(cat) ? (root.querySelector('[data-kindsof="'+cat+'"] input:checked') || {}).value : null;
+    return { category: Number(cat), foodType: kind ? Number(kind) : null };
+  }
+
+  var PDPA_NOTICE = 'ตลาดนัดโรงพยาบาลสมเด็จพระปิ่นเกล้าเก็บชื่อ นามสกุล เบอร์โทรศัพท์ ที่อยู่ และ Line ID ของท่าน ' +
+    'เพื่อใช้ยืนยันตัวตน ติดต่อเรื่องการจองและการชำระเงินเท่านั้น ไม่เปิดเผยต่อบุคคลภายนอก ' +
+    'ท่านขอแก้ไขข้อมูลได้ที่เมนู "ข้อมูลส่วนตัว" หรือขอลบข้อมูลได้ที่สำนักงานตลาด';
+
   // ---------- Account sign-in / registration modal ----------
   function openAuthModal(mode){
     mode = mode === 'register' ? 'register' : 'login';
@@ -964,32 +1074,34 @@
       '<div class="field"><label for="afUser">ชื่อผู้ใช้</label><input id="afUser" autocomplete="username" required></div>' +
       '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="current-password" required></div>';
 
-    var categoryChecks = CATEGORIES.map(function(c){
-      return '<label class="check-chip"><input type="radio" name="afCat" value="'+c.id+'">'+c.icon+' '+esc(c.label)+'</label>';
-    }).join('');
-    var foodChecks = FOOD_TYPES.map(function(f){
-      return '<label class="check-chip"><input type="checkbox" name="afFood" value="'+f.id+'">'+f.icon+' '+esc(f.label)+'</label>';
-    }).join('');
-
+    var guessName = (profile.vendorName || '').split(/\s+/);
     var registerFields =
-      '<div class="field"><label for="afName">ชื่อ-นามสกุล</label><input id="afName" required value="'+esc(profile.vendorName)+'"></div>' +
-      '<div class="field"><label for="afPhone">เบอร์โทรศัพท์</label><input id="afPhone" required placeholder="08X-XXX-XXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
-      '<div class="field"><span class="field-label" id="afCatLabel">หมวดสินค้าที่จะขาย <span class="muted">(เลือก 1 หมวด)</span></span>' +
-        '<div class="check-grid" role="radiogroup" aria-labelledby="afCatLabel">'+categoryChecks+'</div></div>' +
-      '<div class="field food-types" id="afFoodBox" hidden><span class="field-label" id="afFoodLabel">ขายอาหารประเภทไหน <span class="muted">(อย่างน้อย 1)</span></span>' +
-        '<div class="check-grid" role="group" aria-labelledby="afFoodLabel">'+foodChecks+'</div></div>' +
-      '<div class="field"><label for="afUser">ชื่อผู้ใช้</label><input id="afUser" autocomplete="username" required></div>' +
-      '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="new-password" required></div>';
+      '<div class="field-row">' +
+        '<div class="field"><label for="afFirst">ชื่อ</label><input id="afFirst" autocomplete="given-name" required value="'+esc(guessName[0]||'')+'"></div>' +
+        '<div class="field"><label for="afLast">นามสกุล</label><input id="afLast" autocomplete="family-name" required value="'+esc(guessName.slice(1).join(' '))+'"></div>' +
+      '</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="afPhone">เบอร์โทรศัพท์</label><input id="afPhone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="08XXXXXXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
+        '<div class="field"><label for="afLine">Line ID <span class="muted">(ถ้ามี)</span></label><input id="afLine"></div>' +
+      '</div>' +
+      '<div class="field"><label for="afAddr">ที่อยู่</label><textarea id="afAddr" rows="2" autocomplete="street-address"></textarea></div>' +
+      goodsPickerHtml('af', null, null) +
+      '<div class="field-row">' +
+        '<div class="field"><label for="afUser">ชื่อผู้ใช้ <span class="muted">(a-z 0-9)</span></label><input id="afUser" autocomplete="username" required></div>' +
+        '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="new-password" required></div>' +
+      '</div>' +
+      '<div class="pdpa-box"><p>'+esc(PDPA_NOTICE)+'</p>' +
+        '<label class="checkline"><input type="checkbox" id="afConsent"> ยินยอมให้เก็บและใช้ข้อมูลส่วนบุคคลตามที่แจ้งไว้ข้างต้น</label></div>';
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
       '<div class="auth-toggle" id="authToggle">' +
         '<button type="button" class="auth-toggle-btn '+(mode==='login'?'active':'')+'" data-authmode="login">เข้าสู่ระบบ</button>' +
-        '<button type="button" class="auth-toggle-btn '+(mode==='register'?'active':'')+'" data-authmode="register">สร้างบัญชี</button>' +
+        '<button type="button" class="auth-toggle-btn '+(mode==='register'?'active':'')+'" data-authmode="register">สมัครสมาชิกผู้ค้า</button>' +
       '</div>' +
       '<div class="sub" style="margin-bottom:16px">'+(mode==='register'
-        ? 'สมัครสมาชิกครั้งเดียว เพื่อติดตามการจองและไม่ต้องกรอกข้อมูลซ้ำในครั้งถัดไป'
-        : 'ผู้ขายและเจ้าหน้าที่ตลาดเข้าสู่ระบบที่นี่ — บัญชีเจ้าหน้าที่จะเข้าสู่หน้าแอดมินโดยอัตโนมัติ') + '</div>' +
+        ? 'สมัครสมาชิกครั้งเดียว เพื่อติดตามการจองจากทุกอุปกรณ์และไม่ต้องกรอกข้อมูลซ้ำ'
+        : 'ผู้ดูแลระบบ เจ้าหน้าที่ตลาด และผู้ค้า เข้าสู่ระบบที่นี่ ระบบจะแสดงเมนูตามสิทธิ์ของแต่ละบัญชี') + '</div>' +
       '<form id="authForm">' + (mode==='register' ? registerFields : loginFields) +
         '<div class="form-error" id="afErr"></div>' +
         '<div class="form-actions">' +
@@ -997,7 +1109,6 @@
           '<button type="submit" class="btn primary">'+(mode==='register' ? 'สร้างบัญชี' : 'เข้าสู่ระบบ')+'</button>' +
         '</div>' +
       '</form>' +
-      (mode!=='register' ? '<p class="deposit-note" style="margin-top:14px">เจ้าหน้าที่ตลาด: ใช้บัญชีที่แอดมินใหญ่มอบให้</p>' : '') +
       '</div></div>';
 
     var back = document.getElementById('mb');
@@ -1006,12 +1117,16 @@
     document.getElementById('authToggle').querySelectorAll('.auth-toggle-btn').forEach(function(btn){
       btn.addEventListener('click', function(){ openAuthModal(btn.dataset.authmode); });
     });
-    var foodBox = document.getElementById('afFoodBox');
-    if (foodBox){
-      root.querySelectorAll('input[name="afCat"]').forEach(function(radio){
-        radio.addEventListener('change', function(){ foodBox.hidden = checkedValues(root, 'afCat')[0] !== 'food'; });
-      });
-    }
+    if (mode === 'register') bindGoodsPicker(root, 'af');
+
+    var signedIn = function(res, welcome){
+      saveToken(res.token);
+      applySessionUser(res.user);
+      closeModal();
+      toast(welcome + res.user.name);
+      if (profile.isAdmin){ state.adminMenu = firstMenu(); setTab('admin'); }
+      else setTab('mine');
+    };
 
     document.getElementById('authForm').addEventListener('submit', function(e){
       e.preventDefault();
@@ -1021,79 +1136,134 @@
       var password = document.getElementById('afPass').value;
 
       if (mode === 'register'){
-        var name = document.getElementById('afName').value.trim();
-        var phone = document.getElementById('afPhone').value.trim();
-        var category = checkedValues(root, 'afCat')[0];
-        var foodTypes = category === 'food' ? checkedValues(root, 'afFood') : [];
-        if (!name || !phone || !username || !password){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
-        if (!category){ errEl.textContent = 'กรุณาเลือกหมวดสินค้าที่จะขาย 1 หมวด'; return; }
-        if (category === 'food' && !foodTypes.length){ errEl.textContent = 'เลือกขายอาหารแล้ว กรุณาเลือกประเภทอาหารอย่างน้อย 1 อย่าง'; return; }
+        var body = {
+          firstName: document.getElementById('afFirst').value.trim(),
+          lastName: document.getElementById('afLast').value.trim(),
+          phone: document.getElementById('afPhone').value.trim(),
+          lineId: document.getElementById('afLine').value.trim(),
+          address: document.getElementById('afAddr').value.trim(),
+          username: username, password: password,
+          consent: document.getElementById('afConsent').checked
+        };
+        var goods = readGoodsPicker(root, 'af');
+        body.category = goods.category; body.foodType = goods.foodType;
+        if (!body.firstName || !body.lastName || !body.phone || !username || !password){ errEl.textContent = 'กรุณากรอกชื่อ นามสกุล เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ'; return; }
+        if (!goods.category){ errEl.textContent = 'กรุณาเลือกประเภทสินค้าที่จะขาย 1 ประเภท'; return; }
+        if (hasKinds(goods.category) && !goods.foodType){ errEl.textContent = 'กรุณาเลือกชนิดของ' + categoryMeta(goods.category).label; return; }
+        if (!body.consent){ errEl.textContent = 'กรุณาติ๊กยินยอมให้เก็บข้อมูลส่วนบุคคลก่อนสมัครสมาชิก'; return; }
         submitBtn.disabled = true;
-        apiPost('/api/auth/register', { name:name, phone:phone, username:username, password:password, category:category, foodTypes:foodTypes })
-          .then(function(res){
-            saveToken(res.token);
-            profile.vendorToken = res.user.id;
-            profile.vendorName = res.user.name;
-            profile.vendorPhone = res.user.phone;
-            profile.categories = res.user.categories || [];
-            profile.foodTypes = res.user.foodTypes || [];
-            profile.isRegistered = true;
-            saveProfile();
-            closeModal();
-            toast('สร้างบัญชีสำเร็จ — เข้าสู่ระบบในชื่อ ' + res.user.name);
-            setTab('mine');
-          }).catch(function(err){
-            errEl.textContent = err.error || 'สร้างบัญชีไม่สำเร็จ';
-            submitBtn.disabled = false;
-          });
+        apiPost('/api/auth/register', body)
+          .then(function(res){ signedIn(res, 'สร้างบัญชีสำเร็จ — ยินดีต้อนรับ '); })
+          .catch(function(err){ errEl.textContent = err.error || 'สร้างบัญชีไม่สำเร็จ'; submitBtn.disabled = false; });
         return;
       }
 
       if (!username || !password){ errEl.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'; return; }
       submitBtn.disabled = true;
-      apiPost('/api/auth/login', { username:username, password:password }).then(function(res){
-        saveToken(res.token);
-        if (res.user.kind === 'admin'){
-          profile.isAdmin = true;
-          profile.isHeadAdmin = res.user.role === 'head';
-          profile.adminName = res.user.name;
-          profile.adminUsername = res.user.id;
-          saveProfile();
-          closeModal();
-          setTab('admin');
-          toast('เข้าสู่ระบบในชื่อ ' + res.user.name);
-        } else {
-          profile.vendorToken = res.user.id;
-          profile.vendorName = res.user.name;
-          profile.vendorPhone = res.user.phone;
-          profile.categories = res.user.categories || [];
-          profile.foodTypes = res.user.foodTypes || [];
-          profile.isRegistered = true;
-          saveProfile();
-          closeModal();
-          toast('ยินดีต้อนรับกลับมา ' + res.user.name);
-          setTab('mine');
-        }
+      apiPost('/api/auth/login', { username:username, password:password })
+        .then(function(res){ signedIn(res, 'เข้าสู่ระบบในชื่อ '); })
+        .catch(function(err){ errEl.textContent = err.error || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'; submitBtn.disabled = false; });
+    });
+  }
+
+  // 1.3 ผู้ใช้แก้ไขข้อมูลส่วนตัวของตนเอง
+  function openProfileModal(){
+    var u = profile.user || {};
+    var root = document.getElementById('modalRoot');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>ข้อมูลส่วนตัว</h3>' +
+      '<div class="sub">'+esc(ROLE_LABELS[u.roleId]||'')+(u.username ? ' · ชื่อผู้ใช้ '+esc(u.username) : '')+
+        (u.roleId === ROLE.VENDOR && u.category ? ' · ขาย'+esc(goodsLabel(u.category, u.foodType)) : '')+'</div>' +
+      '<form id="pfForm">' +
+        '<div class="field-row">' +
+          '<div class="field"><label for="pfFirst">ชื่อ</label><input id="pfFirst" required value="'+esc(u.firstName||'')+'"></div>' +
+          '<div class="field"><label for="pfLast">นามสกุล</label><input id="pfLast" required value="'+esc(u.lastName||'')+'"></div>' +
+        '</div>' +
+        '<div class="field-row">' +
+          '<div class="field"><label for="pfPhone">เบอร์โทรศัพท์</label><input id="pfPhone" type="tel" required value="'+esc(u.phone||'')+'"></div>' +
+          '<div class="field"><label for="pfLine">Line ID</label><input id="pfLine" value="'+esc(u.lineId||'')+'"></div>' +
+        '</div>' +
+        '<div class="field"><label for="pfAddr">ที่อยู่</label><textarea id="pfAddr" rows="2">'+esc(u.address||'')+'</textarea></div>' +
+        '<details class="pf-pass"><summary>เปลี่ยนรหัสผ่าน</summary><div class="field-row">' +
+          '<div class="field"><label for="pfCur">รหัสผ่านปัจจุบัน</label><input id="pfCur" type="password" autocomplete="current-password"></div>' +
+          '<div class="field"><label for="pfNew">รหัสผ่านใหม่</label><input id="pfNew" type="password" autocomplete="new-password"></div>' +
+        '</div></details>' +
+        '<div class="form-error" id="pfErr"></div>' +
+        '<div class="form-actions"><button type="button" class="btn ghost" id="pfCancel">ยกเลิก</button><button type="submit" class="btn primary">บันทึก</button></div>' +
+      '</form></div></div>';
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('pfCancel').onclick = closeModal;
+    document.getElementById('pfForm').addEventListener('submit', function(e){
+      e.preventDefault();
+      var btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      apiPut('/api/auth/me', {
+        firstName: document.getElementById('pfFirst').value.trim(), lastName: document.getElementById('pfLast').value.trim(),
+        phone: document.getElementById('pfPhone').value.trim(), lineId: document.getElementById('pfLine').value.trim(),
+        address: document.getElementById('pfAddr').value.trim(),
+        currentPassword: document.getElementById('pfCur').value, newPassword: document.getElementById('pfNew').value || undefined
+      }).then(function(user){
+        applySessionUser(user);
+        closeModal();
+        toast('บันทึกข้อมูลส่วนตัวแล้ว');
+        render();
       }).catch(function(err){
-        errEl.textContent = err.error || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
-        submitBtn.disabled = false;
+        document.getElementById('pfErr').textContent = err.error || 'บันทึกไม่สำเร็จ';
+        btn.disabled = false;
       });
     });
   }
 
-  // ---------- My Bookings ----------
+  // Booking progress like a parcel tracker: 1 ส่งคำขอ → 2 อนุมัติ → 3 ชำระเงิน → 4 ยืนยันรับเงิน.
+  function bookingTimelineHtml(b){
+    var pay = b.payment_status || 'unpaid';
+    var stopped = b.status === 'rejected' || b.status === 'cancelled';
+    var reached = 1;
+    if (b.status === 'approved') reached = pay === 'confirmed' ? 4 : pay === 'paid' ? 3 : 2;
+    var steps = [
+      ['ส่งคำขอ', fmtDateTime(b.created_at)],
+      [b.status === 'rejected' ? 'ถูกปฏิเสธ' : 'อนุมัติ', b.decided_at && b.status !== 'cancelled' ? fmtDateTime(b.decided_at) : ''],
+      ['ชำระเงิน', b.paid_at ? fmtDateTime(b.paid_at) : ''],
+      ['ยืนยันรับเงิน', b.confirmed_at ? fmtDateTime(b.confirmed_at) : '']
+    ];
+    var html = steps.map(function(s, i){
+      var n = i + 1;
+      var cls = n <= reached ? 'done' : (n === reached + 1 && !stopped ? 'next' : '');
+      if (stopped && n === 2) cls = 'stop';
+      return '<li class="tl-step '+cls+'"><span class="tl-dot">'+(cls === 'stop' ? '✕' : n)+'</span>' +
+        '<span class="tl-label">'+esc(s[0])+'</span>'+(s[1] ? '<span class="tl-time">'+esc(s[1])+'</span>' : '')+'</li>';
+    }).join('');
+    return '<ol class="timeline'+(stopped ? ' is-stopped' : '')+'" aria-label="สถานะการจอง">'+html+'</ol>' +
+      (b.status === 'cancelled' ? '<div class="muted small">การจองนี้ถูกยกเลิกแล้ว</div>' : '');
+  }
+  function fmtDateTime(iso){
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.getDate() + ' ' + TH_MONTHS[d.getMonth()] + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // ---------- My Bookings (4.4 ติดตามสถานะการจอง) ----------
   function renderMine(){
     var host = document.getElementById('view-mine');
     if (!state.myBookingsLoaded){
       host.innerHTML = '<div class="empty"><div class="big">⏳</div>กำลังโหลดการจองของคุณ…</div>';
       return;
     }
-    var mine = state.myBookings || [];
-    if (!mine.length){
+    var all = state.myBookings || [];
+    if (!all.length){
       host.innerHTML = '<div class="section-head"><h2>การจองของฉัน</h2></div>' +
         '<div class="empty"><div class="big">🧺</div>ยังไม่มีคำขอจอง<br>ไปที่ผังตลาดเพื่อขอจองล็อก</div>';
       return;
     }
+    var filter = state.myFilter || 'all';
+    var mine = all.filter(function(b){ return filter === 'all' || b.status === filter; });
+    var bar = ['all','pending','approved','rejected','cancelled'].map(function(s){
+      var n = s === 'all' ? all.length : all.filter(function(b){ return b.status === s; }).length;
+      return '<button class="btn small '+(filter===s?'primary':'ghost')+'" data-myfilt="'+s+'">'+(s==='all'?'ทั้งหมด':statusLabel(s))+' ('+n+')</button>';
+    }).join('');
     var rows = mine.map(function(b){
       var payStatus = b.payment_status || 'unpaid';
       var approved = b.status === 'approved';
@@ -1102,37 +1272,45 @@
       var canPay = approved && upcoming && payStatus === 'unpaid';
       var canAttachReceipt = approved && payStatus === 'paid' && b.payment_method !== 'cash';
       var hint = '';
-      if (b.status === 'pending') hint = 'รอเจ้าหน้าที่อนุมัติก่อนชำระเงิน';
-      else if (approved && payStatus === 'paid') hint = b.payment_method === 'cash' ? 'แจ้งชำระเงินสดแล้ว — รอเจ้าหน้าที่ยืนยัน' : (b.receipt_path ? 'ส่งสลิปแล้ว — รอเจ้าหน้าที่ยืนยัน' : 'กรุณาแนบสลิปเพื่อให้เจ้าหน้าที่ตรวจสอบ');
-      else if (approved && payStatus === 'confirmed') hint = 'เจ้าหน้าที่ยืนยันรับเงินแล้ว';
-      return '<div class="booking-row">' +
+      if (b.status === 'pending') hint = 'รอเจ้าหน้าที่ตลาดอนุมัติก่อนชำระเงิน';
+      else if (approved && payStatus === 'unpaid') hint = 'อนุมัติแล้ว กรุณาชำระเงิน';
+      else if (approved && payStatus === 'paid') hint = b.payment_method === 'cash' ? 'แจ้งชำระเงินสดแล้ว — รอเจ้าหน้าที่ตลาดยืนยัน' : (b.receipt_path ? 'ส่งสลิปแล้ว — รอเจ้าหน้าที่ตลาดยืนยัน' : 'กรุณาแนบสลิปเพื่อให้เจ้าหน้าที่ตลาดตรวจสอบ');
+      else if (approved && payStatus === 'confirmed') hint = 'เจ้าหน้าที่ตลาดยืนยันรับเงินแล้ว';
+      return '<div class="booking-card">' +
+        '<div class="booking-row">' +
         '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+'</div>' +
-        '<div class="stalltag">ค่าเช่า '+fmtMoney(b.deposit_amount)+' · ราคา'+esc(rateLabel(b.rate_type))+'</div>' +
+        '<div class="stalltag">'+esc(b.goods_label || goodsLabel(b.category, b.food_type))+' · '+fmtMoney(b.total_amount)+' (ราคา'+esc(rateLabel(b.rate_type))+')</div>' +
         (hint ? '<div class="muted small">'+esc(hint)+'</div>' : '') + '</div>' +
         '<div class="dates">'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>' +
         (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>' : '') +
-        '<span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span>' +
-        (approved ? '<span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+'</span>' : '') +
         '<div class="row-actions">' +
-        (canPay ? '<button class="btn small primary" data-pay="'+b.id+'">ชำระเงิน '+fmtMoney(b.deposit_amount)+'</button>' : '') +
+        (canPay ? '<button class="btn small primary" data-pay="'+b.id+'">ชำระเงิน '+fmtMoney(b.total_amount)+'</button>' : '') +
         (canAttachReceipt ? '<button class="btn small ghost" data-addreceipt="'+b.id+'">'+(b.receipt_path?'เปลี่ยนสลิป':'แนบสลิป')+'</button>' : '') +
-        (canCancel ? '<button class="btn small danger" data-cancel="'+b.id+'">ยกเลิก</button>' : '') +
+        (canCancel ? '<button class="btn small danger" data-cancel="'+b.id+'">ยกเลิกการจอง</button>' : '') +
         '</div>' +
+        '</div>' +
+        bookingTimelineHtml(b) +
         '</div>';
     }).join('');
-    host.innerHTML = '<div class="section-head"><h2>การจองของฉัน</h2><span class="muted small">'+mine.length+' รายการ</span></div>' +
-      '<div class="booking-list">'+rows+'</div>';
+    host.innerHTML = '<div class="section-head"><h2>การจองของฉัน</h2><span class="muted small">'+all.length+' รายการ</span></div>' +
+      '<div class="filter-bar">'+bar+'</div>' +
+      '<div class="booking-list">'+(rows || '<div class="empty small">ไม่มีการจองในสถานะนี้</div>')+'</div>';
 
+    host.querySelectorAll('[data-myfilt]').forEach(function(btn){
+      btn.addEventListener('click', function(){ state.myFilter = btn.dataset.myfilt; renderMine(); });
+    });
     host.querySelectorAll('[data-cancel]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        apiDelete('/api/bookings/' + btn.dataset.cancel)
-          .then(function(){ toast('ยกเลิกการจองแล้ว'); loadMyBookings(); loadPublicData(); })
-          .catch(function(err){ toast((err && err.error) || 'ยกเลิกไม่สำเร็จ', true); });
+        confirmAction('ยกเลิกการจองนี้? ล็อกจะกลับเป็นว่างให้ผู้อื่นจองได้', function(){
+          apiDelete('/api/bookings/' + btn.dataset.cancel)
+            .then(function(){ toast('ยกเลิกการจองแล้ว'); loadMyBookings(); loadPublicData(); })
+            .catch(function(err){ toast((err && err.error) || 'ยกเลิกไม่สำเร็จ', true); });
+        }, 'ยกเลิกการจอง');
       });
     });
     host.querySelectorAll('[data-pay]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        var b = mine.find(function(x){ return String(x.id) === btn.dataset.pay; });
+        var b = all.find(function(x){ return String(x.id) === btn.dataset.pay; });
         if (b) openPayModal(b);
       });
     });
@@ -1151,9 +1329,9 @@
       '<h3>ชำระค่าเช่าล็อก '+esc(b.stall_code||'')+'</h3>' +
       '<div class="sub">'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+' · ราคา'+esc(rateLabel(b.rate_type))+'</div>' +
       '<div class="deposit-box">' +
-        '<div class="deposit-row"><span>ยอดที่ต้องชำระ</span><strong>'+fmtMoney(b.deposit_amount)+'</strong></div>' +
+        '<div class="deposit-row"><span>ยอดที่ต้องชำระ</span><strong>'+fmtMoney(b.total_amount)+'</strong></div>' +
         '<div class="field" style="margin-top:10px"><label for="payMethod">วิธีการชำระเงิน</label><select id="payMethod">'+payOptions+'</select></div>' +
-        (qr ? '<div class="qr-scan" id="payQr"><img class="receipt-thumb" style="width:150px;height:150px" src="'+esc(qr)+'" data-full="'+esc(qr)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ แตะเพื่อขยาย"><span class="muted small">สแกนด้วยแอปธนาคาร แล้วโอน '+fmtMoney(b.deposit_amount)+'</span></div>'
+        (qr ? '<div class="qr-scan" id="payQr"><img class="receipt-thumb" style="width:150px;height:150px" src="'+esc(qr)+'" data-full="'+esc(qr)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ แตะเพื่อขยาย"><span class="muted small">สแกนด้วยแอปธนาคาร แล้วโอน '+fmtMoney(b.total_amount)+'</span></div>'
             : '<p class="deposit-note" id="payQr">ยังไม่มี QR พร้อมเพย์ กรุณาสอบถามเลขบัญชีจากเจ้าหน้าที่ตลาด</p>') +
         '<p class="deposit-note" id="payHint"></p>' +
       '</div>' +
@@ -1281,128 +1459,249 @@
     return el;
   }
   function requestQrUpload(){
-    if (!profile.isHeadAdmin){ toast('เฉพาะแอดมินใหญ่เท่านั้นที่แก้ไขได้', true); return; }
+    if (!canMenu('settings')){ toast('เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขได้', true); return; }
     wantsQrUpload = true;
     ensureQrInput().click();
   }
 
-  // ---------- Admin ----------
+  // ---------- ระบบจัดการข้อมูล (staff side) ----------
+  // Menus and their tabs follow the screen design (3.10). A role sees only the menus in roles.menu_access.
+  var ADMIN_MENUS = [
+    { key:'users', label:'จัดการผู้ใช้', icon:'👥', tabs:[['admin','ผู้ดูแลระบบ'],['staff','เจ้าหน้าที่ตลาด'],['vendor','ผู้ค้า']] },
+    { key:'market', label:'จัดการผังตลาด', icon:'🗺️', tabs:[['categories','ประเภทสินค้า'],['zones','โซน'],['stalls','ล็อก'],['map','แผนผังตลาด']] },
+    { key:'bookings', label:'จัดการการจอง', icon:'📋', tabs:[['approvals','อนุมัติคำขอ'],['walkin','จองแทนผู้ค้า'],['all','การจองทั้งหมด']] },
+    { key:'payments', label:'การชำระเงิน', icon:'💳', tabs:[['pending','รอยืนยันรับเงิน'],['history','ประวัติการชำระเงิน']] },
+    { key:'inspections', label:'ตรวจสอบตลาด', icon:'🔍', tabs:[['daily','บันทึกผลตรวจ'],['fines','ประวัติค่าปรับ']] },
+    { key:'announcements', label:'ประกาศ', icon:'📢', tabs:[] },
+    { key:'reports', label:'รายงานสรุปยอด', icon:'📊', tabs:[] },
+    { key:'settings', label:'ตั้งค่าระบบ', icon:'⚙️', tabs:[['qr','QR พร้อมเพย์'],['roles','สิทธิ์การใช้งาน'],['backup','สำรองและกู้คืนข้อมูล']] }
+  ];
+  function visibleMenus(){ return ADMIN_MENUS.filter(function(m){ return canMenu(m.key); }); }
+  function firstMenu(){ var v = visibleMenus(); return v.length ? (v.find(function(m){ return m.key === 'bookings'; }) || v[0]).key : 'bookings'; }
+  function menuTabs(key){
+    var m = ADMIN_MENUS.find(function(x){ return x.key === key; });
+    var tabs = m ? m.tabs : [];
+    // Market staff manage vendors only.
+    if (key === 'users' && !profile.isHeadAdmin) tabs = tabs.filter(function(t){ return t[0] === 'vendor'; });
+    return tabs;
+  }
+  function adminTab(key){
+    var tabs = menuTabs(key);
+    var t = state.adminTabs[key];
+    return tabs.some(function(x){ return x[0] === t; }) ? t : (tabs[0] ? tabs[0][0] : '');
+  }
+  function openAdmin(menu, tab){
+    state.adminMenu = menu;
+    if (tab) state.adminTabs[menu] = tab;
+    render();
+    refreshAdminData();
+  }
+
   function renderAdmin(){
     var host = document.getElementById('view-admin');
     if (!profile.isAdmin){
-      host.innerHTML = '<div class="empty"><div class="big">🔒</div>กรุณาเข้าสู่ระบบด้วยบัญชีเจ้าหน้าที่<br><button class="btn primary" id="goLogin" style="margin-top:10px">เข้าสู่ระบบ</button></div>';
+      host.innerHTML = '<div class="empty"><div class="big">🔒</div>กรุณาเข้าสู่ระบบด้วยบัญชีผู้ดูแลระบบหรือเจ้าหน้าที่ตลาด<br><button class="btn primary" id="goLogin" style="margin-top:10px">เข้าสู่ระบบ</button></div>';
       document.getElementById('goLogin').onclick = function(){ openAuthModal('login'); };
       return;
     }
-    var sections = [
-      ['approvals','อนุมัติคำขอ'], ['walkin','จองแทนลูกค้า'], ['bookings','การจองทั้งหมด'], ['summary','สรุปยอด'], ['vendors','ผู้ขาย'],
-      ['announcements','ประกาศ'], ['audit','ตรวจสอบตลาด'], ['zones','โซน'],
-      ['stalls','ล็อก'], ['map','แผนผังตลาด'], ['settings','ตั้งค่า']
-    ];
-    if (profile.isHeadAdmin) sections.push(['admins','แอดมิน']);
-
-    var nav = sections.map(function(s){
-      return '<button class="'+(state.adminSection===s[0]?'active':'')+'" data-sec="'+s[0]+'">'+s[1]+'</button>';
+    var menus = visibleMenus();
+    if (!menus.length){
+      host.innerHTML = '<div class="empty"><div class="big">🔒</div>สิทธิ์ของบัญชีนี้ยังไม่มีเมนูที่ใช้งานได้ กรุณาติดต่อผู้ดูแลระบบ</div>';
+      return;
+    }
+    if (!canMenu(state.adminMenu)) state.adminMenu = firstMenu();
+    var menu = state.adminMenu;
+    var counts = {
+      bookings: (state.bookings || []).filter(function(b){ return b.status === 'pending'; }).length,
+      payments: (state.bookings || []).filter(function(b){ return b.status === 'approved' && b.payment_status === 'paid'; }).length
+    };
+    var nav = menus.map(function(m){
+      return '<button class="'+(menu===m.key?'active':'')+'" data-menu="'+m.key+'"><span class="nav-ico" aria-hidden="true">'+m.icon+'</span>' +
+        '<span class="nav-label">'+m.label+'</span>'+(counts[m.key] ? '<span class="nav-count">'+counts[m.key]+'</span>' : '')+'</button>';
     }).join('');
-    var navOptions = sections.map(function(s){
-      return '<option value="'+s[0]+'" '+(state.adminSection===s[0]?'selected':'')+'>'+s[1]+'</option>';
+    var navOptions = menus.map(function(m){
+      return '<option value="'+m.key+'" '+(menu===m.key?'selected':'')+'>'+m.icon+' '+m.label+(counts[m.key] ? ' ('+counts[m.key]+')' : '')+'</option>';
     }).join('');
+    var tabs = menuTabs(menu);
+    var tab = adminTab(menu);
+    var tabBar = tabs.length > 1 ? '<div class="sub-tabs" role="tablist">' + tabs.map(function(t){
+      return '<button type="button" role="tab" class="sub-tab'+(t[0]===tab?' active':'')+'" aria-selected="'+(t[0]===tab)+'" data-subtab="'+t[0]+'">'+t[1]+'</button>';
+    }).join('') + '</div>' : '';
+    var current = ADMIN_MENUS.find(function(m){ return m.key === menu; });
 
     host.innerHTML =
-      '<div class="section-head"><h2>ระบบจัดการของเจ้าหน้าที่ตลาด</h2></div>' +
+      '<div class="section-head admin-head"><h2>ระบบจัดการข้อมูล</h2><span class="muted small">'+esc(ROLE_LABELS[profile.roleId]||'')+'</span></div>' +
       '<div class="admin-grid">' +
-        '<select class="admin-nav-select" id="adminNavSelect" aria-label="หมวดหมู่ในระบบแอดมิน">'+navOptions+'</select>' +
-        '<nav class="admin-nav">'+nav+'</nav>' +
-        '<div class="admin-panel" id="adminPanel"></div>' +
+        '<select class="admin-nav-select" id="adminNavSelect" aria-label="เมนูระบบจัดการข้อมูล">'+navOptions+'</select>' +
+        '<nav class="admin-nav" aria-label="เมนูระบบจัดการข้อมูล">'+nav+'</nav>' +
+        '<div class="admin-main">' +
+          '<div class="admin-title"><span aria-hidden="true">'+current.icon+'</span> '+current.label+'</div>' +
+          tabBar +
+          '<div class="admin-panel" id="adminPanel"></div>' +
+        '</div>' +
       '</div>';
 
     host.querySelectorAll('.admin-nav button').forEach(function(btn){
-      btn.addEventListener('click', function(){ state.adminSection = btn.dataset.sec; render(); refreshAdminData(); });
+      btn.addEventListener('click', function(){ openAdmin(btn.dataset.menu); });
     });
-    var activeNavBtn = host.querySelector('.admin-nav button.active');
-    if (activeNavBtn && activeNavBtn.scrollIntoView){
-      activeNavBtn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-    }
-    document.getElementById('adminNavSelect').addEventListener('change', function(){
-      state.adminSection = this.value; render(); refreshAdminData();
+    document.getElementById('adminNavSelect').addEventListener('change', function(){ openAdmin(this.value); });
+    host.querySelectorAll('[data-subtab]').forEach(function(btn){
+      btn.addEventListener('click', function(){ openAdmin(menu, btn.dataset.subtab); });
     });
 
     var panel = document.getElementById('adminPanel');
-    if (state.adminSection==='approvals') renderApprovals(panel);
-    else if (state.adminSection==='bookings') renderAllBookings(panel);
-    else if (state.adminSection==='summary') renderSummaryAdmin(panel);
-    else if (state.adminSection==='vendors') renderVendorAdmin(panel);
-    else if (state.adminSection==='announcements') renderAnnouncementAdmin(panel);
-    else if (state.adminSection==='audit') renderAuditAdmin(panel);
-    else if (state.adminSection==='zones') renderZoneAdmin(panel);
-    else if (state.adminSection==='stalls') renderStallAdmin(panel);
-    else if (state.adminSection==='map') renderMapAdmin(panel);
-    else if (state.adminSection==='settings') renderSettingsAdmin(panel);
-    else if (state.adminSection==='walkin') renderWalkinAdmin(panel);
-    else if (state.adminSection==='admins') renderAdminAccounts(panel);
+    if (menu === 'users') renderUserAdmin(panel, tab);
+    else if (menu === 'market'){
+      if (tab === 'categories') renderCategoryAdmin(panel);
+      else if (tab === 'zones') renderZoneAdmin(panel);
+      else if (tab === 'stalls') renderStallAdmin(panel);
+      else renderMapAdmin(panel);
+    }
+    else if (menu === 'bookings'){
+      if (tab === 'walkin') renderWalkinAdmin(panel);
+      else if (tab === 'all') renderAllBookings(panel);
+      else renderApprovals(panel);
+    }
+    else if (menu === 'payments') renderPaymentAdmin(panel, tab);
+    else if (menu === 'inspections') renderAuditAdmin(panel, tab);
+    else if (menu === 'announcements') renderAnnouncementAdmin(panel);
+    else if (menu === 'reports') renderSummaryAdmin(panel);
+    else if (menu === 'settings') renderSettingsAdmin(panel, tab);
+  }
+
+  function searchBoxHtml(id, value, placeholder){
+    return '<input type="search" class="admin-search" id="'+id+'" value="'+esc(value||'')+'" placeholder="'+esc(placeholder)+'" aria-label="'+esc(placeholder)+'">';
+  }
+  // Live filtering without losing focus on each keystroke.
+  function bindSearch(id, key, rerender){
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', function(){
+      state[key] = el.value;
+      var pos = el.selectionStart;
+      rerender();
+      var again = document.getElementById(id);
+      if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch(e){} }
+    });
+  }
+  function matches(q, parts){
+    q = String(q || '').trim().toLowerCase();
+    if (!q) return true;
+    return parts.join(' ').toLowerCase().indexOf(q) !== -1;
+  }
+  function bookingWhoHtml(b){
+    return '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.vendor_name)+'</div><div class="stalltag">'+esc(b.vendor_phone)+'</div></div>' +
+      '<div class="dates"><span class="stalltag">'+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+' · '+esc(b.goods_label || goodsLabel(b.category, b.food_type))+'</span><br>' +
+      fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>';
+  }
+
+  // 4.1 ตรวจสอบคำขอจอง พร้อมประวัติการจองของผู้ค้า / 4.2 อนุมัติ-ปฏิเสธ
+  function vendorHistoryHtml(b){
+    var mine = (state.bookings || []).filter(function(x){ return x.vendor_id === b.vendor_id && x.id !== b.id; });
+    var count = function(s){ return mine.filter(function(x){ return x.status === s; }).length; };
+    var fines = (state.auditLogs || []).filter(function(l){ return mine.some(function(x){ return x.id === l.booking_id; }); });
+    var summary = mine.length
+      ? 'เคยจอง '+mine.length+' ครั้ง · อนุมัติ '+count('approved')+' · ปฏิเสธ '+count('rejected')+' · ยกเลิก '+count('cancelled') +
+        (fines.length ? ' · ถูกปรับ '+fines.length+' ครั้ง' : '')
+      : 'ผู้ค้ารายใหม่ ยังไม่เคยจองมาก่อน';
+    var list = mine.slice(0, 6).map(function(x){
+      return '<li><span class="mono">'+esc(x.stall_code)+'</span> '+fmtDate(x.start_date)+' → '+fmtDate(x.end_date)+
+        ' <span class="badge '+esc(x.status)+'">'+esc(statusLabel(x.status))+'</span>' +
+        (x.status === 'approved' ? ' <span class="paybadge '+esc(x.payment_status)+'">'+esc(payStatusLabel(x.payment_status))+'</span>' : '')+'</li>';
+    }).join('');
+    return '<details class="vendor-history"><summary>📜 ประวัติการจองของผู้ค้ารายนี้: '+esc(summary)+'</summary>' +
+      (list ? '<ul>'+list+'</ul>' : '') + '</details>';
   }
 
   function renderApprovals(panel){
-    var all = state.bookings || [];
-    var pending = all.filter(function(b){ return b.status==='pending'; });
-    var awaitingPay = all.filter(function(b){ return b.status==='approved' && b.payment_status==='paid'; });
-    var methodLabel = function(id){ var m = PAYMENT_METHODS.find(function(x){ return x.id===id; }); return m ? m.label : id; };
-    var head = function(b){
-      return '<div class="who"><div class="name">'+categoryMeta(b.category).icon+' '+esc(b.vendor_name)+'</div><div class="stalltag">'+esc(b.vendor_phone)+'</div></div>' +
-        '<div class="dates"><span class="stalltag">'+esc(b.stall_code||'—')+' · '+esc(b.zone_name||'')+'</span><br>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+(b.note?'<br><span class="small">"'+esc(b.note)+'"</span>':'')+'</div>';
-    };
-    var pendingRows = pending.map(function(b){
-      return '<div class="booking-row">' + head(b) +
-        '<span class="muted small">ค่าเช่า '+fmtMoney(b.deposit_amount)+' (ราคา'+esc(rateLabel(b.rate_type))+')</span>' +
+    var pending = (state.bookings || []).filter(function(b){ return b.status==='pending'; });
+    var rows = pending.map(function(b){
+      return '<div class="booking-card"><div class="booking-row">' + bookingWhoHtml(b) +
+        '<span class="muted small">'+fmtMoney(b.total_amount)+' (ราคา'+esc(rateLabel(b.rate_type))+')</span>' +
         '<div class="row-actions">' +
         '<button class="btn small primary" data-approve="'+b.id+'">อนุมัติ</button>' +
         '<button class="btn small danger" data-reject="'+b.id+'">ปฏิเสธ</button>' +
-        '</div></div>';
-    }).join('');
-    var payRows = awaitingPay.map(function(b){
-      var cash = b.payment_method === 'cash';
-      return '<div class="booking-row">' + head(b) +
-        (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>'
-          : '<span class="muted small">'+(cash ? 'ชำระเงินสด' : 'ยังไม่แนบสลิป')+'</span>') +
-        '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.deposit_amount)+'</span>' +
-        '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>' +
-        '</div>';
+        '</div></div>' + vendorHistoryHtml(b) + '</div>';
     }).join('');
     panel.innerHTML =
       '<div class="card" style="padding:16px">' +
         '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">คำขอจองรออนุมัติ</h2><span class="muted small">'+pending.length+' รายการ</span></div>' +
-        (pendingRows ? '<div class="booking-list">'+pendingRows+'</div>' : '<div class="empty small">✅ ไม่มีคำขอค้างอนุมัติ</div>') +
-      '</div>' +
-      '<div class="card" style="padding:16px">' +
-        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">รอยืนยันรับเงิน</h2><span class="muted small">'+awaitingPay.length+' รายการ</span></div>' +
-        (payRows ? '<div class="booking-list">'+payRows+'</div>' : '<div class="empty small">✅ ไม่มีรายการรอยืนยันรับเงิน</div>') +
+        (rows ? '<div class="booking-list">'+rows+'</div>' : '<div class="empty small">✅ ไม่มีคำขอค้างอนุมัติ</div>') +
       '</div>';
-
+    var decide = function(id, status){
+      apiPut('/api/bookings/' + id + '/status', { status: status })
+        .then(function(){ toast(status === 'approved' ? 'อนุมัติการจองแล้ว' : 'ปฏิเสธการจองแล้ว'); loadAdminBookings(); loadPublicData(); })
+        .catch(function(err){ toast(err.error || 'อัปเดตการจองไม่สำเร็จ', true); });
+    };
     panel.querySelectorAll('[data-approve]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        apiPut('/api/bookings/' + btn.dataset.approve + '/status', { status:'approved' })
-          .then(function(){ toast('อนุมัติการจองแล้ว'); loadAdminBookings(); loadPublicData(); })
-          .catch(function(err){ toast(err.error || 'อัปเดตการจองไม่สำเร็จ', true); });
-      });
+      btn.addEventListener('click', function(){ decide(btn.dataset.approve, 'approved'); });
     });
     panel.querySelectorAll('[data-reject]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        apiPut('/api/bookings/' + btn.dataset.reject + '/status', { status:'rejected' })
-          .then(function(){ toast('ปฏิเสธการจองแล้ว'); loadAdminBookings(); loadPublicData(); })
-          .catch(function(err){ toast(err.error || 'อัปเดตการจองไม่สำเร็จ', true); });
+        confirmAction('ปฏิเสธคำขอจองนี้?', function(){ decide(btn.dataset.reject, 'rejected'); }, 'ปฏิเสธ');
       });
     });
-    panel.querySelectorAll('[data-confirmpay]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        apiPut('/api/bookings/' + btn.dataset.confirmpay + '/payment', { paymentStatus:'confirmed' })
-          .then(function(){ toast('ยืนยันรับเงินแล้ว'); loadAdminBookings(); })
-          .catch(function(err){ toast(err.error || 'อัปเดตไม่สำเร็จ', true); });
+    // Fines feed the vendor history; load them once (loadFines re-renders, so never call it on every render).
+    if (!state.finesLoaded && canMenu('inspections')){ state.finesLoaded = true; loadFines(); }
+  }
+
+  // 5.3 ตรวจสอบหลักฐานการชำระเงิน / 5.4 ยืนยันการรับเงิน
+  function renderPaymentAdmin(panel, tab){
+    var all = state.bookings || [];
+    var confirmPay = function(id, method){
+      apiPut('/api/bookings/' + id + '/payment', { paymentStatus:'confirmed', paymentMethod: method || undefined })
+        .then(function(){ toast('ยืนยันรับเงินแล้ว'); loadAdminBookings(); })
+        .catch(function(err){ toast(err.error || 'อัปเดตไม่สำเร็จ', true); });
+    };
+    if (tab === 'history'){
+      var q = state.payQuery;
+      var list = all.filter(function(b){
+        return b.status === 'approved' && matches(q, [b.vendor_name, b.vendor_phone, b.stall_code, b.zone_name, payStatusLabel(b.payment_status), methodLabel(b.payment_method)]);
       });
+      var rowsHtml = list.map(function(b){
+        var st = b.payment_status || 'unpaid';
+        return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span></td>' +
+          '<td class="mono">'+esc(b.stall_code)+'</td><td>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+'</td>' +
+          '<td class="mono">'+fmtMoney(b.total_amount)+'</td><td>'+esc(st === 'unpaid' ? '—' : methodLabel(b.payment_method))+'</td>' +
+          '<td>'+(b.receipt_path ? '<img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิป แตะเพื่อขยาย">' : '<span class="muted small">—</span>')+'</td>' +
+          '<td><span class="paybadge '+esc(st)+'">'+esc(payStatusLabel(st))+'</span>' +
+            (b.confirmed_by_name ? '<br><span class="muted small">โดย '+esc(b.confirmed_by_name)+'</span>' : '')+'</td>' +
+          '<td>'+(st !== 'confirmed' ? '<button type="button" class="btn small ghost" data-cashpay="'+b.id+'">รับเงินสดแล้ว</button>' : '')+'</td></tr>';
+      }).join('');
+      panel.innerHTML = '<div class="card" style="padding:16px">' +
+        '<div class="toolbar-row">'+searchBoxHtml('paySearch', q, 'ค้นหาชื่อ เบอร์โทร รหัสล็อก หรือสถานะ')+'<span class="muted small">'+list.length+' รายการ</span></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>ผู้ค้า</th><th>ล็อก</th><th>วันที่</th><th>ยอดเงิน</th><th>วิธีชำระ</th><th>สลิป</th><th>สถานะ</th><th></th></tr></thead>' +
+        '<tbody>'+(rowsHtml || '<tr><td colspan="8" class="empty">ไม่พบรายการ</td></tr>')+'</tbody></table></div></div>';
+      bindSearch('paySearch', 'payQuery', function(){ renderPaymentAdmin(panel, tab); });
+      panel.querySelectorAll('[data-cashpay]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          confirmAction('ยืนยันว่ารับเงินสดสำหรับการจองนี้แล้ว?', function(){ confirmPay(btn.dataset.cashpay, 'cash'); }, 'ยืนยันรับเงิน');
+        });
+      });
+      wireReceiptThumbs(panel);
+      return;
+    }
+    var awaiting = all.filter(function(b){ return b.status==='approved' && b.payment_status==='paid'; });
+    var rows = awaiting.map(function(b){
+      var cash = b.payment_method === 'cash';
+      return '<div class="booking-row">' + bookingWhoHtml(b) +
+        (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>'
+          : '<span class="muted small">'+(cash ? 'ชำระเงินสด' : 'ยังไม่แนบสลิป')+'</span>') +
+        '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.total_amount)+'</span>' +
+        '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>' +
+        '</div>';
+    }).join('');
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">ผู้ค้าแจ้งชำระแล้ว รอยืนยันรับเงิน</h2><span class="muted small">'+awaiting.length+' รายการ</span></div>' +
+      (rows ? '<div class="booking-list">'+rows+'</div>' : '<div class="empty small">✅ ไม่มีรายการรอยืนยันรับเงิน</div>') +
+      '</div>';
+    panel.querySelectorAll('[data-confirmpay]').forEach(function(btn){
+      btn.addEventListener('click', function(){ confirmPay(btn.dataset.confirmpay); });
     });
     wireReceiptThumbs(panel);
   }
 
-  // ---------- staff book on a customer's behalf ----------
+  // ---------- 3.6 จองแทนผู้ค้า (Walk-in) ----------
   // The form lives in state.walkin so the 10-second refresh, which re-renders the panel, keeps what was typed.
   function newWalkin(){
     return { stallId:'', start:todayStr(), end:todayStr(), mode:'new', vendorId:'', name:'', phone:'', category:'', foodType:'', note:'', paid:false };
@@ -1413,24 +1712,27 @@
 
   function renderWalkinAdmin(panel){
     var w = state.walkin || (state.walkin = newWalkin());
-    var vendor = w.mode === 'existing' ? state.vendors.find(function(v){ return v.id === w.vendorId; }) : null;
-    var vCats = vendor && vendor.categories ? vendor.categories.split(',') : null;
-    var vFoods = vendor && vendor.food_types ? vendor.food_types.split(',') : null;
+    var vendor = w.mode === 'existing' ? state.vendors.find(function(v){ return String(v.id) === String(w.vendorId); }) : null;
+    var vCat = vendor && vendor.hasLogin && vendor.category ? String(vendor.category) : null;
+    var vKind = vendor && vendor.hasLogin && vendor.foodType ? String(vendor.foodType) : null;
     // Goods are limited by the vendor's registration and by the zone of the chosen stall.
     var pickedStall = w.stallId ? stallById(w.stallId) : null;
     var pickedZone = pickedStall ? zoneById(pickedStall.zone_id) : null;
-    var foodChoices = (vFoods ? FOOD_TYPES.filter(function(f){ return vFoods.indexOf(f.id) !== -1; }) : FOOD_TYPES)
-      .filter(function(f){ return zoneAllowsFood(pickedZone, f.id); });
-    var catChoices = (vCats ? CATEGORIES.filter(function(c){ return vCats.indexOf(c.id) !== -1; }) : CATEGORIES)
-      .filter(function(c){ return zoneAllowsCategory(pickedZone, c.id) && (c.id !== 'food' || foodChoices.length); });
+    var kindChoicesFor = function(catId){
+      return kindsOf(catId).filter(function(f){ return (!vKind || String(f.id) === vKind) && zoneAllowsFood(pickedZone, f.id); });
+    };
+    var catChoices = CATEGORIES.filter(function(c){
+      return (!vCat || String(c.id) === vCat) && zoneAllowsCategory(pickedZone, c.id) && (!hasKinds(c.id) || kindChoicesFor(c.id).length);
+    });
     var zoneMismatch = pickedStall && !catChoices.length
       ? 'ล็อก ' + pickedStall.code + ' อยู่ใน' + (pickedZone ? pickedZone.name : 'โซนนี้') + ' ซึ่งรับเฉพาะ' + zoneAllowedLabel(pickedZone) +
-        (vendor ? ' ไม่ตรงกับสินค้าที่ผู้ขายรายนี้ลงทะเบียนไว้' : '') + ' กรุณาเลือกล็อกอื่น'
+        (vendor ? ' ไม่ตรงกับสินค้าที่ผู้ค้ารายนี้ลงทะเบียนไว้' : '') + ' กรุณาเลือกล็อกอื่น'
       : null;
-    if (w.category && !catChoices.some(function(c){ return c.id === w.category; })) w.category = '';
-    if (!w.category && (vCats || catChoices.length === 1) && catChoices.length) w.category = catChoices[0].id;
-    if (w.foodType && !foodChoices.some(function(f){ return f.id === w.foodType; })) w.foodType = '';
-    if (!w.foodType && foodChoices.length === 1) w.foodType = foodChoices[0].id;
+    if (w.category && !catChoices.some(function(c){ return String(c.id) === String(w.category); })) w.category = '';
+    if (!w.category && (vCat || catChoices.length === 1) && catChoices.length) w.category = String(catChoices[0].id);
+    var foodChoices = w.category ? kindChoicesFor(w.category) : [];
+    if (w.foodType && !foodChoices.some(function(f){ return String(f.id) === String(w.foodType); })) w.foodType = '';
+    if (!w.foodType && foodChoices.length === 1) w.foodType = String(foodChoices[0].id);
 
     var datesOk = w.start && w.end && w.end >= w.start;
     var stallOptions = state.zones.map(function(z){
@@ -1444,55 +1746,56 @@
     var stall = w.stallId ? stallById(w.stallId) : null;
     if (stall && datesOk && stallBusy(stall.id, w.start, w.end)) { w.stallId = ''; stall = null; }
 
-    var vendorOptions = '<option value="">— เลือกผู้ขาย —</option>' + state.vendors.filter(function(v){ return v.active; })
+    var vendorOptions = '<option value="">— เลือกผู้ค้า —</option>' + state.vendors.filter(function(v){ return v.active; })
       .slice().sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'th'); })
       .map(function(v){
-        return '<option value="'+esc(v.id)+'" '+(v.id===w.vendorId?'selected':'')+'>'+esc(v.name)+' · '+esc(v.phone)+(v.is_regular?' · ขาประจำ':'')+'</option>';
+        return '<option value="'+v.id+'" '+(String(v.id)===String(w.vendorId)?'selected':'')+'>'+esc(v.name)+' · '+esc(v.phone)+(v.isRegular?' · ขาประจำ':'')+'</option>';
       }).join('');
-    var catOptions = (vCats ? '' : '<option value="">— เลือกหมวดสินค้า —</option>') + catChoices.map(function(c){
-      return '<option value="'+c.id+'" '+(c.id===w.category?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
+    var catOptions = (vCat ? '' : '<option value="">— เลือกประเภทสินค้า —</option>') + catChoices.map(function(c){
+      return '<option value="'+c.id+'" '+(String(c.id)===String(w.category)?'selected':'')+'>'+c.icon+' '+esc(c.label)+'</option>';
     }).join('');
 
-    var isRegular = !!(vendor && vendor.is_regular);
+    var isRegular = !!(vendor && vendor.isRegular);
     var price = '';
     if (stall && datesOk){
       var rate = isRegular ? stall.regular_price_per_day : stall.price_per_day;
       var days = daysInclusive(w.start, w.end);
-      price = 'ค่าเช่า ' + fmtMoney(rate) + ' × ' + days + ' วัน = <strong class="mono">' + fmtMoney(rate * days) + '</strong> (' + (isRegular ? 'ราคาสมาชิก' : 'ราคาทั่วไป') + ')';
+      price = 'ยอดเงินรวม ' + fmtMoney(rate) + ' × ' + days + ' วัน = <strong class="mono">' + fmtMoney(rate * days) + '</strong> (ราคา' + (isRegular ? 'ขาประจำ' : 'ขาจร') + ')';
     }
-    var clash = stall && datesOk ? neighborClash(stall.id, w.category, w.category === 'food' ? w.foodType : null, w.start, w.end) : null;
+    var withKinds = w.category && hasKinds(w.category);
+    var clash = stall && datesOk ? neighborClash(stall.id, w.category, withKinds ? w.foodType : null, w.start, w.end) : null;
 
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<p class="muted small" style="margin:0 0 12px">สำหรับลูกค้าที่จองผ่านแอปเองไม่สะดวก เช่น ผู้สูงอายุ การจองที่เจ้าหน้าที่ทำให้จะอนุมัติทันที</p>' +
+      '<p class="muted small" style="margin:0 0 12px">สำหรับผู้ค้าที่จองผ่านระบบเองไม่สะดวก เช่น ผู้สูงอายุ การจองที่เจ้าหน้าที่ตลาดทำให้จะอนุมัติทันที</p>' +
       '<div class="field-row">' +
         '<div class="field"><label for="wkStart">วันที่เริ่ม</label><input type="date" id="wkStart" value="'+esc(w.start)+'"></div>' +
         '<div class="field"><label for="wkEnd">วันที่สิ้นสุด</label><input type="date" id="wkEnd" value="'+esc(w.end)+'"></div>' +
       '</div>' +
       '<div class="field"><label for="wkStall">ล็อก</label><select id="wkStall"><option value="">— เลือกล็อก —</option>'+stallOptions+'</select></div>' +
-      '<div class="field"><span class="field-label">ลูกค้า</span><div class="seg" role="group" aria-label="ประเภทลูกค้า">' +
-        '<button type="button" class="seg-btn'+(w.mode==='new'?' active':'')+'" data-wkmode="new" aria-pressed="'+(w.mode==='new')+'">ลูกค้าใหม่ / ขาจร</button>' +
-        '<button type="button" class="seg-btn'+(w.mode==='existing'?' active':'')+'" data-wkmode="existing" aria-pressed="'+(w.mode==='existing')+'">ผู้ขายที่มีในระบบ</button>' +
+      '<div class="field"><span class="field-label">ผู้ค้า</span><div class="seg" role="group" aria-label="ประเภทผู้ค้า">' +
+        '<button type="button" class="seg-btn'+(w.mode==='new'?' active':'')+'" data-wkmode="new" aria-pressed="'+(w.mode==='new')+'">ผู้ค้าใหม่ / ขาจร</button>' +
+        '<button type="button" class="seg-btn'+(w.mode==='existing'?' active':'')+'" data-wkmode="existing" aria-pressed="'+(w.mode==='existing')+'">ผู้ค้าที่มีในระบบ</button>' +
       '</div></div>' +
       (w.mode === 'new'
         ? '<div class="field-row">' +
-            '<div class="field"><label for="wkName">ชื่อลูกค้า</label><input id="wkName" value="'+esc(w.name)+'"></div>' +
-            '<div class="field"><label for="wkPhone">เบอร์โทรศัพท์</label><input id="wkPhone" value="'+esc(w.phone)+'" placeholder="08X-XXX-XXXX"></div>' +
-          '</div>'
-        : '<div class="field"><label for="wkVendor">ผู้ขาย</label><select id="wkVendor">'+vendorOptions+'</select></div>') +
+            '<div class="field"><label for="wkName">ชื่อ-นามสกุลผู้ค้า</label><input id="wkName" value="'+esc(w.name)+'"></div>' +
+            '<div class="field"><label for="wkPhone">เบอร์โทรศัพท์</label><input id="wkPhone" value="'+esc(w.phone)+'" placeholder="08XXXXXXXX"></div>' +
+          '</div><p class="muted small" style="margin:-4px 0 8px">ถ้าเบอร์นี้มีในระบบแล้ว ระบบจะใช้ข้อมูลผู้ค้าเดิม</p>'
+        : '<div class="field"><label for="wkVendor">ผู้ค้า</label><select id="wkVendor">'+vendorOptions+'</select></div>') +
       '<div class="field-row">' +
-        '<div class="field"><label for="wkCat">หมวดสินค้า</label><select id="wkCat">'+catOptions+'</select></div>' +
-        (w.category === 'food'
-          ? '<div class="field"><label for="wkFood">ประเภทอาหาร</label><select id="wkFood">'+foodOptionsHtml(foodChoices, w.foodType, foodChoices.length === 1 ? null : '— เลือกประเภทอาหาร —')+'</select></div>'
+        '<div class="field"><label for="wkCat">ประเภทสินค้า</label><select id="wkCat">'+catOptions+'</select></div>' +
+        (withKinds
+          ? '<div class="field"><label for="wkFood">ชนิดสินค้า</label><select id="wkFood">'+foodOptionsHtml(foodChoices, w.foodType, foodChoices.length === 1 ? null : '— เลือกชนิดสินค้า —')+'</select></div>'
           : '<div></div>') +
       '</div>' +
-      '<div class="field"><label for="wkNote">หมายเหตุ (ถ้ามี)</label><input id="wkNote" value="'+esc(w.note)+'" placeholder="เช่น ลูกค้าโทรมาจอง"></div>' +
+      '<div class="field"><label for="wkNote">หมายเหตุ (ถ้ามี)</label><input id="wkNote" value="'+esc(w.note)+'" placeholder="เช่น ผู้ค้าโทรมาจอง"></div>' +
       '<label class="checkline"><input type="checkbox" id="wkPaid" '+(w.paid?'checked':'')+'> รับเงินสดแล้ว</label>' +
       (price ? '<p class="deposit-note" style="font-size:.88rem">'+price+'</p>' : '') +
       (zoneMismatch ? '<div class="clash-note" role="alert">'+esc(zoneMismatch)+'</div>' : '') +
       (clash ? '<div class="clash-note" role="alert">'+esc(clash)+'</div>' : '') +
       '<div class="form-error" id="wkErr"></div>' +
       '<div class="form-actions"><button type="button" class="btn ghost" id="wkReset">ล้างฟอร์ม</button>' +
-        '<button type="button" class="btn primary" id="wkSubmit"'+(clash||zoneMismatch?' disabled':'')+'>จองให้ลูกค้า</button></div>' +
+        '<button type="button" class="btn primary" id="wkSubmit"'+(clash||zoneMismatch?' disabled':'')+'>จองแทนผู้ค้า</button></div>' +
       '</div>';
 
     var bindChange = function(id, key){
@@ -1514,17 +1817,17 @@
       var errEl = document.getElementById('wkErr');
       var problem = !w.stallId ? 'กรุณาเลือกล็อก' :
         !datesOk ? 'กรุณาตรวจวันที่ (วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม)' :
-        w.mode === 'new' && (!w.name.trim() || !w.phone.trim()) ? 'กรุณากรอกชื่อและเบอร์โทรของลูกค้า' :
-        w.mode === 'existing' && !w.vendorId ? 'กรุณาเลือกผู้ขาย' :
-        !w.category ? 'กรุณาเลือกหมวดสินค้า' :
-        w.category === 'food' && !w.foodType ? 'กรุณาเลือกประเภทอาหาร' : '';
+        w.mode === 'new' && (!w.name.trim() || !w.phone.trim()) ? 'กรุณากรอกชื่อและเบอร์โทรศัพท์ของผู้ค้า' :
+        w.mode === 'existing' && !w.vendorId ? 'กรุณาเลือกผู้ค้า' :
+        !w.category ? 'กรุณาเลือกประเภทสินค้า' :
+        withKinds && !w.foodType ? 'กรุณาเลือกชนิดสินค้า' : '';
       if (problem){ errEl.textContent = problem; return; }
       var btn = this;
       btn.disabled = true;
       apiPost('/api/bookings/staff', {
-        stallId: w.stallId, vendorId: w.mode === 'existing' ? w.vendorId : null,
+        stallId: Number(w.stallId), vendorId: w.mode === 'existing' ? Number(w.vendorId) : null,
         vendorName: w.name.trim(), vendorPhone: w.phone.trim(),
-        category: w.category, foodType: w.category === 'food' ? w.foodType : null,
+        category: Number(w.category), foodType: withKinds ? Number(w.foodType) : null,
         startDate: w.start, endDate: w.end, note: w.note.trim() || null, paidCash: w.paid
       }).then(function(b){
         toast('จองล็อก ' + b.stall_code + ' ให้ ' + b.vendor_name + ' แล้ว');
@@ -1537,9 +1840,14 @@
     };
   }
 
+  // 8.3 ค้นหาการจองทั้งหมด
   function renderAllBookings(panel){
     var filter = state.bookingsFilter || 'all';
-    var list = (state.bookings||[]).filter(function(b){ return filter==='all' || b.status===filter; });
+    var q = state.bookingQuery;
+    var list = (state.bookings||[]).filter(function(b){
+      return (filter==='all' || b.status===filter) &&
+        matches(q, [b.vendor_name, b.vendor_phone, b.stall_code, b.zone_name, b.goods_label, b.start_date, b.end_date]);
+    });
     var statuses = ['all','pending','approved','rejected','cancelled'];
     var bar = statuses.map(function(s){
       return '<button class="btn small '+(filter===s?'primary':'ghost')+'" data-filt="'+s+'">'+(s==='all'?'ทั้งหมด':statusLabel(s))+'</button>';
@@ -1547,22 +1855,37 @@
 
     var rowsHtml = list.length ? list.map(function(b){
       var payStatus = b.payment_status || 'unpaid';
+      var open = (b.status === 'pending' || b.status === 'approved') && b.end_date >= todayStr();
       return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span>' +
-          (b.created_by ? '<br><span class="pill small">จองแทนโดย '+esc(b.created_by)+'</span>' : '') + '</td>' +
-        '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'<br><span class="muted small">'+esc(goodsLabel(b.category, b.food_type))+'</span></td>' +
+          (b.created_by_name ? '<br><span class="pill small">จองแทนโดย '+esc(b.created_by_name)+'</span>' : '') + '</td>' +
+        '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'<br><span class="muted small">'+esc(b.goods_label || goodsLabel(b.category, b.food_type))+'</span></td>' +
         '<td>'+esc(b.zone_name||'')+'</td>' +
         '<td>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+'</td>' +
-        '<td><span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span></td>' +
-        '<td><span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+'</span></td></tr>';
-    }).join('') : '<tr><td colspan="6" class="empty">ไม่มีรายการจองในตัวกรองนี้</td></tr>';
+        '<td class="mono">'+fmtMoney(b.total_amount)+'</td>' +
+        '<td><span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span>' +
+          (b.approved_by_name ? '<br><span class="muted small">โดย '+esc(b.approved_by_name)+'</span>' : '')+'</td>' +
+        '<td><span class="paybadge '+esc(payStatus)+'">'+esc(payStatusLabel(payStatus))+'</span></td>' +
+        '<td>'+(open ? '<button type="button" class="btn small danger" data-staffcancel="'+b.id+'">ยกเลิก</button>' : '')+'</td></tr>';
+    }).join('') : '<tr><td colspan="8" class="empty">ไม่มีรายการจองในตัวกรองนี้</td></tr>';
 
     panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<div class="toolbar-row">'+searchBoxHtml('bkSearch', q, 'ค้นหาชื่อผู้ค้า เบอร์โทร รหัสล็อก โซน หรือสินค้า')+'<span class="muted small">'+list.length+' รายการ</span></div>' +
       '<div class="filter-bar">'+bar+'</div>' +
-      '<div class="table-wrap"><table><thead><tr><th>ผู้ขาย</th><th>ล็อก</th><th>โซน</th><th>วันที่</th><th>สถานะ</th><th>การชำระเงิน</th></tr></thead>' +
+      '<div class="table-wrap"><table><thead><tr><th>ผู้ค้า</th><th>ล็อก</th><th>โซน</th><th>วันที่</th><th>ยอดเงิน</th><th>สถานะ</th><th>การชำระเงิน</th><th></th></tr></thead>' +
       '<tbody>'+rowsHtml+'</tbody></table></div></div>';
 
+    bindSearch('bkSearch', 'bookingQuery', function(){ renderAllBookings(panel); });
     panel.querySelectorAll('[data-filt]').forEach(function(btn){
       btn.addEventListener('click', function(){ state.bookingsFilter = btn.dataset.filt; renderAllBookings(panel); });
+    });
+    panel.querySelectorAll('[data-staffcancel]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        confirmAction('ยกเลิกการจองนี้? ล็อกจะกลับเป็นว่าง', function(){
+          apiDelete('/api/bookings/' + btn.dataset.staffcancel)
+            .then(function(){ toast('ยกเลิกการจองแล้ว'); loadAdminBookings(); loadPublicData(); })
+            .catch(function(err){ toast(err.error || 'ยกเลิกไม่สำเร็จ', true); });
+        }, 'ยกเลิกการจอง');
+      });
     });
   }
 
@@ -1601,7 +1924,7 @@
       var e = b.end_date < to ? b.end_date : to;
       if (s > e) return;
       var days = daysInclusive(s, e);
-      var amount = (Number(b.deposit_amount) || 0) / daysInclusive(b.start_date, b.end_date) * days;
+      var amount = (Number(b.total_amount) || 0) / daysInclusive(b.start_date, b.end_date) * days;
       var paid = b.payment_status === 'confirmed' ? amount : 0;
       var g = b.rate_type === 'regular' ? t.regular : t.guest;
       t.amount += amount; t.confirmed += paid; t.stallDays += days; t.bookings++;
@@ -1624,7 +1947,7 @@
     }).map(function(b){
       return {
         code: b.stall_code || '—', vendor: b.vendor_name, zone: b.zone_name || '—', rateType: b.rate_type,
-        amount: (Number(b.deposit_amount) || 0) / daysInclusive(b.start_date, b.end_date),
+        amount: (Number(b.total_amount) || 0) / daysInclusive(b.start_date, b.end_date),
         payStatus: b.payment_status || 'unpaid'
       };
     }).sort(function(a, b){ return a.code.localeCompare(b.code, undefined, { numeric:true }); });
@@ -1930,108 +2253,154 @@
     };
   }
 
-  // Checkboxes for "what this zone accepts". Ticking "อาหารทุกประเภท" covers every food type.
-  function allowedPickerHtml(name, selected){
-    selected = selected || [];
-    var anyFood = selected.indexOf('food') !== -1;
-    var chip = function(value, text, extra){
-      return '<label class="check-chip"><input type="checkbox" name="'+name+'" value="'+value+'"'+
-        (selected.indexOf(value) !== -1 ? ' checked' : '')+(extra||'')+'>'+text+'</label>';
-    };
-    var cats = CATEGORIES.filter(function(c){ return c.id !== 'food'; }).map(function(c){ return chip(c.id, c.icon+' '+esc(c.label)); }).join('');
-    var foods = FOOD_TYPES.map(function(f){ return chip('food:'+f.id, f.icon+' '+esc(f.label), anyFood ? ' disabled' : ''); }).join('');
-    return '<div class="field"><span class="field-label">สินค้าที่โซนนี้รับ <span class="muted">(ไม่ติ๊กเลย = รับทุกประเภท)</span></span>' +
-      '<div class="check-grid">'+chip('food', '🍽️ อาหารทุกประเภท')+cats+'</div>' +
-      '<span class="field-label muted small" style="margin-top:8px">หรือเฉพาะอาหารบางประเภท เช่น แถวเครื่องดื่มอย่างเดียว</span>' +
-      '<div class="check-grid">'+foods+'</div></div>';
+  // Generic modal with a form; onSubmit(form, errEl, btn) does the saving.
+  function openFormModal(title, sub, fieldsHtml, onSubmit, okLabel){
+    var root = document.getElementById('modalRoot');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>'+esc(title)+'</h3>' + (sub ? '<div class="sub">'+sub+'</div>' : '') +
+      '<form id="fmForm">' + fieldsHtml +
+        '<div class="form-error" id="fmErr"></div>' +
+        '<div class="form-actions"><button type="button" class="btn ghost" id="fmCancel">ยกเลิก</button>' +
+        '<button type="submit" class="btn primary">'+esc(okLabel || 'บันทึก')+'</button></div>' +
+      '</form></div></div>';
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('fmCancel').onclick = closeModal;
+    var form = document.getElementById('fmForm');
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var btn = form.querySelector('button[type=submit]');
+      var errEl = document.getElementById('fmErr');
+      errEl.textContent = '';
+      onSubmit(form, errEl, btn);
+    });
+    return form;
   }
-  function bindAllowedPicker(root, name){
-    var all = root.querySelector('input[name="'+name+'"][value="food"]');
-    if (!all) return;
-    all.addEventListener('change', function(){
-      root.querySelectorAll('input[name="'+name+'"][value^="food:"]').forEach(function(i){
-        i.disabled = all.checked; if (all.checked) i.checked = false;
+  function fval(id){ var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+  // ---------- 2.1 ประเภทสินค้า ----------
+  function renderCategoryAdmin(panel){
+    var rows = CATEGORIES.map(function(c){
+      var kids = kindsOf(c.id);
+      var row = function(item, isKind){
+        return '<tr'+(isKind?' class="sub-row"':'')+'><td>'+(isKind?'<span class="muted">└</span> ':'')+item.icon+' '+esc(item.label)+'</td>' +
+          '<td>'+(isKind ? esc(c.label) : (kids.length ? kids.length+' ชนิด' : '<span class="muted">—</span>'))+'</td>' +
+          '<td><button type="button" class="btn small ghost" data-editcat="'+item.id+'">แก้ไข</button> ' +
+          '<button type="button" class="btn small danger" data-delcat="'+item.id+'">ลบ</button></td></tr>';
+      };
+      return row(c, false) + kids.map(function(k){ return row(k, true); }).join('');
+    }).join('');
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<div class="toolbar-row"><p class="muted small" style="margin:0">ประเภทหลัก เช่น อาหาร เสื้อผ้า และชนิดย่อยภายใต้ประเภทหลัก เช่น ชนิดของอาหาร ใช้กำหนดว่าโซนรับสินค้าอะไร</p>' +
+      '<button type="button" class="btn primary" id="catAdd">+ เพิ่มประเภทสินค้า</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>ประเภทสินค้า</th><th>ประเภทหลัก / ชนิดย่อย</th><th>จัดการ</th></tr></thead>' +
+      '<tbody>'+(rows || '<tr><td colspan="3" class="empty">ยังไม่มีประเภทสินค้า</td></tr>')+'</tbody></table></div></div>';
+    var openCat = function(id){
+      var row = CATEGORY_ROWS.find(function(r){ return String(r.id) === String(id); });
+      var parents = CATEGORIES.filter(function(c){ return !row || c.id !== row.id; }).map(function(c){
+        return '<option value="'+c.id+'"'+(row && String(row.parentId)===String(c.id)?' selected':'')+'>'+esc(c.label)+'</option>';
+      }).join('');
+      openFormModal(row ? 'แก้ไขประเภทสินค้า' : 'เพิ่มประเภทสินค้า', '',
+        '<div class="field"><label for="ctName">ชื่อประเภทสินค้า</label><input id="ctName" required maxlength="100" value="'+esc(row ? row.name : '')+'"></div>' +
+        '<div class="field"><label for="ctParent">อยู่ภายใต้ประเภทหลัก</label><select id="ctParent"><option value="">— เป็นประเภทหลัก —</option>'+parents+'</select></div>',
+        function(form, errEl, btn){
+          btn.disabled = true;
+          var body = { name: fval('ctName'), parentId: fval('ctParent') ? Number(fval('ctParent')) : null };
+          (row ? apiPut('/api/categories/' + row.id, body) : apiPost('/api/categories', body))
+            .then(function(){ toast('บันทึกประเภทสินค้าแล้ว'); closeModal(); loadPublicData(); })
+            .catch(function(err){ errEl.textContent = err.error || 'บันทึกไม่สำเร็จ'; btn.disabled = false; });
+        });
+    };
+    document.getElementById('catAdd').onclick = function(){ openCat(null); };
+    panel.querySelectorAll('[data-editcat]').forEach(function(btn){ btn.addEventListener('click', function(){ openCat(btn.dataset.editcat); }); });
+    panel.querySelectorAll('[data-delcat]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        confirmAction('ลบประเภทสินค้า "' + anyCategoryLabel(btn.dataset.delcat) + '" และชนิดย่อยทั้งหมด? ลบได้เฉพาะประเภทที่ยังไม่ถูกใช้', function(){
+          apiDelete('/api/categories/' + btn.dataset.delcat)
+            .then(function(){ toast('ลบประเภทสินค้าแล้ว'); loadPublicData(); })
+            .catch(function(err){ toast(err.error || 'ลบไม่สำเร็จ', true); });
+        });
       });
     });
   }
 
-  function openEditZoneModal(zoneId){
-    var z = zoneById(zoneId);
-    if (!z) return;
-    var root = document.getElementById('modalRoot');
-    root.innerHTML =
-      '<div class="modal-back" id="mb"><div class="modal">' +
-      '<h3>แก้ไขโซน — '+esc(z.name)+'</h3>' +
-      '<form id="zoneForm">' +
-        '<div class="field"><label for="ezName">ชื่อโซน</label><input id="ezName" required value="'+esc(z.name)+'"></div>' +
-        '<div class="field"><label for="ezDesc">รายละเอียด</label><input id="ezDesc" value="'+esc(z.description||'')+'"></div>' +
-        allowedPickerHtml('ezAllow', zoneAllowed(z)) +
-        '<p class="muted small">การจองที่มีอยู่แล้วไม่ถูกยกเลิก แต่คำขอที่ยังรออนุมัติจะอนุมัติได้เฉพาะสินค้าที่โซนรับ</p>' +
-        '<div class="form-error" id="ezErr"></div>' +
-        '<div class="form-actions">' +
-          '<button type="button" class="btn ghost" id="ezCancel">ยกเลิก</button>' +
-          '<button type="submit" class="btn primary">บันทึก</button>' +
-        '</div>' +
-      '</form>' +
-      '</div></div>';
-    var back = document.getElementById('mb');
-    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
-    document.getElementById('ezCancel').onclick = closeModal;
-    var form = document.getElementById('zoneForm');
-    bindAllowedPicker(form, 'ezAllow');
-    form.addEventListener('submit', function(e){
-      e.preventDefault();
-      var name = document.getElementById('ezName').value.trim();
-      var errEl = document.getElementById('ezErr');
-      if (!name){ errEl.textContent = 'กรุณากรอกชื่อโซน'; return; }
-      apiPut('/api/zones/' + z.id, {
-        name: name, description: document.getElementById('ezDesc').value.trim() || null,
-        allowedGoods: checkedValues(form, 'ezAllow')
-      }).then(function(){ toast('บันทึกโซนแล้ว'); closeModal(); loadPublicData(); })
-        .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกโซนไม่สำเร็จ'; });
+  // Checkboxes for "what this zone accepts" (D5 zone_categories). Ticking a category covers all its kinds.
+  function allowedPickerHtml(name, selected){
+    selected = (selected || []).map(String);
+    var chip = function(value, text, extra){
+      return '<label class="check-chip"><input type="checkbox" name="'+name+'" value="'+value+'"'+
+        (selected.indexOf(String(value)) !== -1 ? ' checked' : '')+(extra||'')+'>'+text+'</label>';
+    };
+    var tops = CATEGORIES.map(function(c){ return chip(c.id, c.icon+' '+esc(c.label)+(hasKinds(c.id) ? ' (ทุกชนิด)' : '')); }).join('');
+    var kinds = CATEGORIES.filter(function(c){ return hasKinds(c.id); }).map(function(c){
+      var all = selected.indexOf(String(c.id)) !== -1;
+      return '<span class="field-label muted small" style="margin-top:8px">หรือเฉพาะบางชนิดของ'+esc(c.label)+' เช่น แถวเครื่องดื่มอย่างเดียว</span>' +
+        '<div class="check-grid" data-kindgroup="'+c.id+'">' + kindsOf(c.id).map(function(k){ return chip(k.id, k.icon+' '+esc(k.label), all ? ' disabled' : ''); }).join('') + '</div>';
+    }).join('');
+    return '<div class="field"><span class="field-label">ประเภทสินค้าที่โซนนี้รับ <span class="muted">(ไม่ติ๊กเลย = รับทุกประเภท)</span></span>' +
+      '<div class="check-grid">'+tops+'</div>' + kinds + '</div>';
+  }
+  function bindAllowedPicker(root, name){
+    CATEGORIES.filter(function(c){ return hasKinds(c.id); }).forEach(function(c){
+      var all = root.querySelector('input[name="'+name+'"][value="'+c.id+'"]');
+      if (!all) return;
+      all.addEventListener('change', function(){
+        root.querySelectorAll('[data-kindgroup="'+c.id+'"] input').forEach(function(i){
+          i.disabled = all.checked; if (all.checked) i.checked = false;
+        });
+      });
     });
   }
 
+  // ---------- 2.1 โซน ----------
+  var ZONE_COLOR_LABELS = { 'zone-1':'ส้มอิฐ', 'zone-2':'น้ำเงิน', 'zone-3':'ม่วง', 'zone-4':'เขียว' };
+  function openZoneModal(zoneId){
+    var z = zoneId ? zoneById(zoneId) : null;
+    var colors = ZONE_COLOR_KEYS.map(function(k, i){
+      var on = z ? z.color === k : i === state.zones.length % 4;
+      return '<label class="color-chip" style="--zc:var(--'+k+')"><input type="radio" name="zColor" value="'+k+'"'+(on?' checked':'')+'><span></span>'+ZONE_COLOR_LABELS[k]+'</label>';
+    }).join('');
+    var form = openFormModal(z ? 'แก้ไขโซน — ' + z.name : 'เพิ่มโซน', '',
+      '<div class="field"><label for="zName">ชื่อโซน</label><input id="zName" required maxlength="100" value="'+esc(z ? z.name : '')+'" placeholder="แถวเครื่องดื่ม"></div>' +
+      '<div class="field"><label for="zDesc">รายละเอียด</label><input id="zDesc" value="'+esc(z ? z.description || '' : '')+'" placeholder="ระบุตำแหน่งโดยย่อ"></div>' +
+      '<div class="field"><span class="field-label">สีของโซนบนแผนผัง</span><div class="check-grid">'+colors+'</div></div>' +
+      allowedPickerHtml('zAllow', z ? zoneAllowed(z) : []) +
+      (z ? '<p class="muted small">การจองที่มีอยู่แล้วไม่ถูกยกเลิก แต่คำขอที่ยังรออนุมัติจะอนุมัติได้เฉพาะสินค้าที่โซนรับ</p>' : ''),
+      function(f, errEl, btn){
+        if (!fval('zName')){ errEl.textContent = 'กรุณากรอกชื่อโซน'; return; }
+        btn.disabled = true;
+        var body = { name: fval('zName'), description: fval('zDesc') || null, color: checkedValues(f, 'zColor')[0],
+          allowed: checkedValues(f, 'zAllow').map(Number) };
+        (z ? apiPut('/api/zones/' + z.id, body) : apiPost('/api/zones', body))
+          .then(function(){ toast('บันทึกโซนแล้ว'); closeModal(); loadPublicData(); })
+          .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกโซนไม่สำเร็จ'; btn.disabled = false; });
+      });
+    bindAllowedPicker(form, 'zAllow');
+  }
+
   function renderZoneAdmin(panel){
-    var rows = state.zones.map(function(z){
-      var color = ZONE_COLORS[(z.color_index||0)%4];
+    var q = state.zoneQuery;
+    var list = state.zones.filter(function(z){ return matches(q, [z.name, z.description, zoneAllowedLabel(z)]); });
+    var rows = list.map(function(z){
       var count = stallsInZone(z.id).length;
-      return '<tr><td><span class="zone-chip"><span class="zone-dot" style="background:'+color+'"></span>'+esc(z.name)+'</span></td>' +
-        '<td>'+esc(z.description||'')+'</td>' +
+      return '<tr><td><span class="zone-chip"><span class="zone-dot" style="background:'+zoneColor(z)+'"></span>'+esc(z.name)+'</span>' +
+          (z.description ? '<br><span class="muted small">'+esc(z.description)+'</span>' : '')+'</td>' +
+        '<td>'+esc(ZONE_COLOR_LABELS[z.color] || '')+'</td>' +
         '<td>'+(zoneAllowed(z).length ? esc(zoneAllowedLabel(z)) : '<span class="muted">ทุกประเภท</span>')+'</td>' +
         '<td>'+count+'</td>' +
         '<td><button type="button" class="btn small ghost" data-editzone="'+z.id+'">แก้ไข</button> ' +
         '<button type="button" class="btn small danger" data-delzone="'+z.id+'">ลบ</button></td></tr>';
     }).join('');
-
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<p class="muted small" style="margin:0 0 12px">กำหนดว่าแต่ละโซนรับสินค้าอะไร เช่น แถวนี้รับเฉพาะเครื่องดื่ม แถวนี้รับเฉพาะอาหาร ระบบจะไม่ให้จองหรืออนุมัติสินค้าที่โซนไม่รับ</p>' +
-      '<div class="table-wrap"><table><thead><tr><th>โซน</th><th>รายละเอียด</th><th>สินค้าที่รับ</th><th>จำนวนล็อก</th><th></th></tr></thead>' +
-      '<tbody>'+(rows||'<tr><td colspan="5" class="empty">ยังไม่มีโซน</td></tr>')+'</tbody></table></div>' +
-      '<div id="zAddBox" style="margin-top:14px">' +
-        '<div class="add-row">' +
-          '<div class="field"><label for="zName">ชื่อโซน</label><input id="zName" placeholder="แถวเครื่องดื่ม"></div>' +
-          '<div class="field"><label for="zDesc">รายละเอียด</label><input id="zDesc" placeholder="ระบุตำแหน่งโดยย่อ"></div>' +
-        '</div>' +
-        allowedPickerHtml('zAllow', []) +
-        '<button type="button" class="btn primary" id="zAdd">เพิ่มโซน</button>' +
-      '</div></div>';
-
-    var addBox = document.getElementById('zAddBox');
-    bindAllowedPicker(addBox, 'zAllow');
-    var zAddBtn = document.getElementById('zAdd');
-    zAddBtn.onclick = function(){
-      var name = document.getElementById('zName').value.trim();
-      var desc = document.getElementById('zDesc').value.trim();
-      if (!name){ toast('กรุณากรอกชื่อโซน', true); return; }
-      zAddBtn.disabled = true;
-      apiPost('/api/zones', { name:name, description:desc||null, colorIndex: state.zones.length % 4, allowedGoods: checkedValues(addBox, 'zAllow') })
-        .then(function(){ toast('เพิ่มโซนแล้ว'); loadPublicData(); })
-        .catch(function(err){ toast(err.error || 'เพิ่มโซนไม่สำเร็จ', true); })
-        .then(function(){ zAddBtn.disabled = false; });
-    };
+      '<div class="toolbar-row">'+searchBoxHtml('zoneSearch', q, 'ค้นหาโซน')+'<button type="button" class="btn primary" id="zAdd">+ เพิ่มโซน</button></div>' +
+      '<p class="muted small" style="margin:0 0 12px">กำหนดว่าแต่ละโซนรับสินค้าอะไร เช่น แถวนี้รับเฉพาะเครื่องดื่ม ระบบจะไม่ให้จองหรืออนุมัติสินค้าที่โซนไม่รับ</p>' +
+      '<div class="table-wrap"><table><thead><tr><th>ชื่อโซน</th><th>สี</th><th>ประเภทสินค้าที่รับ</th><th>จำนวนล็อก</th><th>จัดการ</th></tr></thead>' +
+      '<tbody>'+(rows||'<tr><td colspan="5" class="empty">ไม่พบโซน</td></tr>')+'</tbody></table></div></div>';
+    bindSearch('zoneSearch', 'zoneQuery', function(){ renderZoneAdmin(panel); });
+    document.getElementById('zAdd').onclick = function(){ openZoneModal(null); };
     panel.querySelectorAll('[data-editzone]').forEach(function(btn){
-      btn.addEventListener('click', function(){ openEditZoneModal(btn.dataset.editzone); });
+      btn.addEventListener('click', function(){ openZoneModal(btn.dataset.editzone); });
     });
     panel.querySelectorAll('[data-delzone]').forEach(function(btn){
       btn.addEventListener('click', function(){
@@ -2045,204 +2414,240 @@
     });
   }
 
+  // ---------- 2.2 ล็อกและราคา ----------
+  function openStallModal(stallId){
+    var s = stallId ? stallById(stallId) : null;
+    var zoneOptions = state.zones.map(function(z){
+      return '<option value="'+z.id+'"'+(s && String(z.id)===String(s.zone_id)?' selected':'')+'>'+esc(z.name)+
+        (zoneAllowed(z).length ? ' (รับเฉพาะ'+esc(zoneAllowedLabel(z))+')' : '')+'</option>';
+    }).join('');
+    openFormModal(s ? 'แก้ไขล็อก ' + s.code : 'เพิ่มล็อก', '',
+      '<div class="field-row">' +
+        '<div class="field"><label for="stCode">รหัสล็อก</label><input id="stCode" required maxlength="10" value="'+esc(s ? s.code : '')+'" placeholder="F29"></div>' +
+        '<div class="field"><label for="stSize">ขนาด (ตร.ม.)</label><input id="stSize" type="number" min="0.5" step="0.5" value="'+(s ? Number(s.size_sqm)||4 : 4)+'"></div>' +
+      '</div>' +
+      '<div class="field"><label for="stZone">โซน</label><select id="stZone">'+zoneOptions+'</select></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="stPrice">ราคาขาจร/วัน (฿)</label><input id="stPrice" type="number" min="0" step="10" required value="'+(s ? Number(s.price_per_day)||0 : 650)+'"></div>' +
+        '<div class="field"><label for="stRegular">ราคาขาประจำ/วัน (฿)</label><input id="stRegular" type="number" min="0" step="10" required value="'+(s ? Number(s.regular_price_per_day)||0 : 450)+'"></div>' +
+      '</div>',
+      function(f, errEl, btn){
+        var price = parseFloat(fval('stPrice')), regular = parseFloat(fval('stRegular'));
+        if (!fval('stCode') || !(price >= 0) || !(regular >= 0)){ errEl.textContent = 'กรุณากรอกรหัสล็อกและราคาทั้งสองแบบ'; return; }
+        btn.disabled = true;
+        var body = { code: fval('stCode'), zoneId: Number(fval('stZone')), sizeSqm: parseFloat(fval('stSize')) || 4, pricePerDay: price, regularPricePerDay: regular };
+        (s ? apiPut('/api/stalls/' + s.id, body) : apiPost('/api/stalls', body))
+          .then(function(){ toast('บันทึกล็อกแล้ว'); closeModal(); loadPublicData(); })
+          .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกล็อกไม่สำเร็จ'; btn.disabled = false; });
+      });
+  }
+
   function renderStallAdmin(panel){
     if (!state.zones.length){
       panel.innerHTML = '<div class="empty">กรุณาเพิ่มโซนก่อนเพิ่มล็อก</div>';
       return;
     }
-    var rows = state.stalls.map(function(s){
+    var q = state.stallQuery;
+    var list = state.stalls.filter(function(s){ var z = zoneById(s.zone_id); return matches(q, [s.code, z ? z.name : '']); });
+    var rows = list.map(function(s){
       var z = zoneById(s.zone_id);
-      return '<tr><td class="mono">'+categoryMeta(s.category).icon+' '+esc(s.code)+'</td><td>'+esc(z?z.name:'—')+'</td>' +
-        '<td>'+fmtMoney(s.price_per_day)+'</td>' +
-        '<td>'+fmtMoney(s.regular_price_per_day)+'</td>' +
-        '<td><span class="badge '+(s.active?'approved':'cancelled')+'">'+(s.active?'เปิดใช้งาน':'ปิด')+'</span></td>' +
-        '<td><button type="button" class="btn small ghost" data-editprice="'+s.id+'">แก้ไข / ย้ายโซน</button> ' +
+      return '<tr><td class="mono">'+esc(s.code)+'</td><td><span class="zone-chip"><span class="zone-dot" style="background:'+zoneColor(z)+'"></span>'+esc(z?z.name:'—')+'</span></td>' +
+        '<td>'+(Number(s.size_sqm)||4)+'</td><td>'+fmtMoney(s.price_per_day)+'</td><td>'+fmtMoney(s.regular_price_per_day)+'</td>' +
+        '<td><span class="badge '+(s.active?'approved':'cancelled')+'">'+(s.active?'เปิดให้จอง':'ปิด')+'</span></td>' +
+        '<td><button type="button" class="btn small ghost" data-editstall="'+s.id+'">แก้ไข</button> ' +
         '<button type="button" class="btn small ghost" data-toggle="'+s.id+'">'+(s.active?'ปิดล็อก':'เปิดล็อก')+'</button> ' +
         '<button type="button" class="btn small danger" data-delstall="'+s.id+'">ลบ</button></td></tr>';
     }).join('');
-
-    var zoneOptions = state.zones.map(function(z){ return '<option value="'+z.id+'">'+esc(z.name)+'</option>'; }).join('');
-    var catOptions = CATEGORIES.map(function(c){ return '<option value="'+c.id+'">'+c.icon+' '+esc(c.label)+'</option>'; }).join('');
-
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="table-wrap"><table><thead><tr><th>รหัส</th><th>โซน</th><th>ราคาทั่วไป/วัน</th><th>ราคาสมาชิก/วัน</th><th>สถานะ</th><th></th></tr></thead>' +
-      '<tbody>'+(rows||'<tr><td colspan="6" class="empty">ยังไม่มีล็อก</td></tr>')+'</tbody></table></div>' +
-      '<div class="add-row" style="margin-top:14px">' +
-        '<div class="field"><label for="sZone">โซน</label><select id="sZone">'+zoneOptions+'</select></div>' +
-        '<div class="field"><label for="sCode">รหัสล็อก</label><input id="sCode" placeholder="F9" style="max-width:100px"></div>' +
-        '<div class="field"><label for="sCat">ประเภทสินค้า</label><select id="sCat">'+catOptions+'</select></div>' +
-        '<div class="field"><label for="sPrice">ราคาทั่วไป/วัน (฿)</label><input id="sPrice" type="number" min="0" step="10" value="650" style="max-width:120px"></div>' +
-        '<div class="field"><label for="sRegPrice">ราคาสมาชิก/วัน (฿)</label><input id="sRegPrice" type="number" min="0" step="10" value="450" style="max-width:120px"></div>' +
-        '<button type="button" class="btn primary" id="sAdd">เพิ่มล็อก</button>' +
-      '</div></div>';
-
-    var sAddBtn = document.getElementById('sAdd');
-    sAddBtn.onclick = function(){
-      var zoneId = document.getElementById('sZone').value;
-      var code = document.getElementById('sCode').value.trim();
-      var category = document.getElementById('sCat').value;
-      var price = parseFloat(document.getElementById('sPrice').value);
-      var regPrice = parseFloat(document.getElementById('sRegPrice').value);
-      if (!code || !(price>=0) || !(regPrice>=0)){ toast('กรุณากรอกรหัสล็อกและราคาทั้งสองแบบ', true); return; }
-      sAddBtn.disabled = true;
-      apiPost('/api/stalls', { zoneId:zoneId, code:code, category:category, pricePerDay:price, regularPricePerDay:regPrice })
-        .then(function(){ toast('เพิ่มล็อกแล้ว'); document.getElementById('sCode').value=''; loadPublicData(); })
-        .catch(function(err){ toast(err.error || 'เพิ่มล็อกไม่สำเร็จ', true); })
-        .then(function(){ sAddBtn.disabled = false; });
-    };
+      '<div class="toolbar-row">'+searchBoxHtml('stallSearch', q, 'ค้นหารหัสล็อกหรือโซน')+'<span class="muted small">'+list.length+' ล็อก</span><button type="button" class="btn primary" id="sAdd">+ เพิ่มล็อก</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>รหัสล็อก</th><th>โซน</th><th>ขนาด (ตร.ม.)</th><th>ราคาขาจร/วัน</th><th>ราคาขาประจำ/วัน</th><th>สถานะ</th><th>จัดการ</th></tr></thead>' +
+      '<tbody>'+(rows||'<tr><td colspan="7" class="empty">ไม่พบล็อก</td></tr>')+'</tbody></table></div></div>';
+    bindSearch('stallSearch', 'stallQuery', function(){ renderStallAdmin(panel); });
+    document.getElementById('sAdd').onclick = function(){ openStallModal(null); };
+    panel.querySelectorAll('[data-editstall]').forEach(function(btn){ btn.addEventListener('click', function(){ openStallModal(btn.dataset.editstall); }); });
     panel.querySelectorAll('[data-toggle]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        var s = state.stalls.find(function(x){ return String(x.id)===btn.dataset.toggle; });
+        var s = stallById(btn.dataset.toggle);
         apiPut('/api/stalls/' + btn.dataset.toggle, { active: !s.active })
-          .then(function(){ toast(s.active?'ปิดล็อกแล้ว':'เปิดล็อกแล้ว'); loadPublicData(); });
+          .then(function(){ toast(s.active?'ปิดล็อกแล้ว':'เปิดล็อกแล้ว'); loadPublicData(); })
+          .catch(function(err){ toast(err.error || 'อัปเดตล็อกไม่สำเร็จ', true); });
       });
     });
     panel.querySelectorAll('[data-delstall]').forEach(function(btn){
       btn.addEventListener('click', function(){
-        var s = state.stalls.find(function(x){ return String(x.id)===btn.dataset.delstall; });
-        confirmAction('ลบล็อก "' + (s?s.code:'ล็อกนี้') + '"? ไม่สามารถย้อนกลับได้', function(){
+        var s = stallById(btn.dataset.delstall);
+        confirmAction('ลบล็อก "' + (s?s.code:'ล็อกนี้') + '"? ประวัติการจองของล็อกนี้จะถูกลบด้วย ไม่สามารถย้อนกลับได้', function(){
           apiDelete('/api/stalls/' + btn.dataset.delstall)
             .then(function(){ toast('ลบล็อกแล้ว'); loadPublicData(); })
             .catch(function(err){ toast(err.error || 'ลบล็อกไม่สำเร็จ', true); });
         });
       });
     });
-    panel.querySelectorAll('[data-editprice]').forEach(function(btn){
-      btn.addEventListener('click', function(){ openEditStallPriceModal(btn.dataset.editprice); });
+  }
+
+  // ---------- 1.3 จัดการข้อมูลผู้ใช้ (one table for all roles, a tab per role) ----------
+  var USER_TABS = { admin: ROLE.ADMIN, staff: ROLE.STAFF, vendor: ROLE.VENDOR };
+  function openUserModal(userId, roleId){
+    var u = userId ? (state.users.concat(state.vendors)).find(function(x){ return String(x.id) === String(userId); }) : null;
+    roleId = u ? u.roleId : roleId;
+    var isVendor = roleId === ROLE.VENDOR;
+    var roleSelect = profile.isHeadAdmin
+      ? '<div class="field"><label for="uRole">สิทธิ์</label><select id="uRole">' + [1,2,3].map(function(r){
+          return '<option value="'+r+'"'+(r===roleId?' selected':'')+'>'+ROLE_LABELS[r]+'</option>';
+        }).join('') + '</select></div>'
+      : '<input type="hidden" id="uRole" value="3">';
+    var form = openFormModal(u ? 'แก้ไขข้อมูล ' + u.name : 'เพิ่ม' + ROLE_LABELS[roleId], u && u.consentAt ? 'ยินยอม PDPA เมื่อ ' + fmtDateTime(u.consentAt) : '',
+      '<div class="field-row">' +
+        '<div class="field"><label for="uFirst">ชื่อ</label><input id="uFirst" required value="'+esc(u ? u.firstName : '')+'"></div>' +
+        '<div class="field"><label for="uLast">นามสกุล</label><input id="uLast" required value="'+esc(u ? u.lastName : '')+'"></div>' +
+      '</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="uPhone">เบอร์โทรศัพท์</label><input id="uPhone" type="tel" required value="'+esc(u ? u.phone : '')+'" placeholder="08XXXXXXXX"></div>' +
+        '<div class="field"><label for="uLine">Line ID</label><input id="uLine" value="'+esc(u ? u.lineId : '')+'"></div>' +
+      '</div>' +
+      '<div class="field"><label for="uAddr">ที่อยู่</label><textarea id="uAddr" rows="2">'+esc(u ? u.address : '')+'</textarea></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="uUser">ชื่อผู้ใช้'+(isVendor?' <span class="muted">(เว้นว่างได้)</span>':'')+'</label><input id="uUser" value="'+esc(u && u.username ? u.username : '')+'"></div>' +
+        '<div class="field"><label for="uPass">รหัสผ่าน'+(u && u.hasLogin ? ' <span class="muted">(เว้นว่าง = ไม่เปลี่ยน)</span>' : '')+'</label><input id="uPass" type="password" autocomplete="new-password"></div>' +
+      '</div>' +
+      roleSelect +
+      '<div id="uVendorBox"'+(isVendor?'':' hidden')+'>' + goodsPickerHtml('u', u ? u.category : null, u ? u.foodType : null) +
+        '<label class="checkline"><input type="checkbox" id="uRegular"'+(u && u.isRegular?' checked':'')+'> ผู้ค้าขาประจำ (ได้ราคาขาประจำ)</label></div>' +
+      '<label class="checkline"><input type="checkbox" id="uActive"'+(!u || u.active?' checked':'')+'> เปิดใช้งานบัญชี</label>' +
+      (!u && isVendor ? '<label class="checkline"><input type="checkbox" id="uConsent"> ผู้ค้ายินยอมให้เก็บข้อมูลส่วนบุคคลแล้ว (PDPA)</label>' : ''),
+      function(f, errEl, btn, confirmDup){
+        var role = Number(fval('uRole'));
+        var goods = readGoodsPicker(f, 'u');
+        var body = {
+          roleId: role, firstName: fval('uFirst'), lastName: fval('uLast'), phone: fval('uPhone'), lineId: fval('uLine'), address: fval('uAddr'),
+          username: fval('uUser'), active: document.getElementById('uActive').checked,
+          isRegular: role === ROLE.VENDOR && document.getElementById('uRegular').checked,
+          category: role === ROLE.VENDOR ? goods.category : null, foodType: role === ROLE.VENDOR ? goods.foodType : null
+        };
+        if (document.getElementById('uPass').value) body.password = document.getElementById('uPass').value;
+        var consentEl = document.getElementById('uConsent');
+        if (consentEl) body.consent = consentEl.checked;
+        if (role === ROLE.VENDOR && goods.category && hasKinds(goods.category) && !goods.foodType){ errEl.textContent = 'กรุณาเลือกชนิดของ' + categoryMeta(goods.category).label; return; }
+        var save = function(confirmDuplicateName){
+          btn.disabled = true;
+          if (confirmDuplicateName) body.confirmDuplicateName = true;
+          (u ? apiPut('/api/users/' + u.id, body) : apiPost('/api/users', body))
+            .then(function(){ toast('บันทึกข้อมูลผู้ใช้แล้ว'); closeModal(); loadUsers(); })
+            .catch(function(err){
+              btn.disabled = false;
+              if (err && err.status === 409 && /อยู่ในระบบแล้ว/.test(err.error || '')){
+                errEl.innerHTML = esc(err.error) + ' <button type="button" class="btn small primary" id="uDupOk">บันทึกต่อ</button>';
+                document.getElementById('uDupOk').onclick = function(){ save(true); };
+              } else {
+                errEl.textContent = (err && err.error) || 'บันทึกไม่สำเร็จ';
+              }
+            });
+        };
+        save(false);
+      });
+    bindGoodsPicker(form, 'u');
+    var roleEl = document.getElementById('uRole');
+    if (roleEl && roleEl.tagName === 'SELECT') roleEl.addEventListener('change', function(){
+      document.getElementById('uVendorBox').hidden = Number(roleEl.value) !== ROLE.VENDOR;
     });
   }
 
-  function openEditStallPriceModal(stallId){
-    var s = state.stalls.find(function(x){ return String(x.id)===String(stallId); });
-    if (!s) return;
-    var root = document.getElementById('modalRoot');
-    root.innerHTML =
-      '<div class="modal-back" id="mb"><div class="modal">' +
-      '<h3>แก้ไขล็อก '+esc(s.code)+'</h3>' +
-      '<form id="priceForm">' +
-        '<div class="field"><label for="epZone">โซน</label><select id="epZone">' + state.zones.map(function(z){
-          return '<option value="'+z.id+'"'+(String(z.id)===String(s.zone_id)?' selected':'')+'>'+esc(z.name)+
-            (zoneAllowed(z).length ? ' (รับเฉพาะ'+esc(zoneAllowedLabel(z))+')' : '')+'</option>';
-        }).join('') + '</select></div>' +
-        '<div class="field"><label for="epGuest">ราคาทั่วไป/วัน (฿)</label><input id="epGuest" type="number" min="0" step="10" value="'+(Number(s.price_per_day)||0)+'" required></div>' +
-        '<div class="field"><label for="epRegular">ราคาสมาชิก/วัน (฿)</label><input id="epRegular" type="number" min="0" step="10" value="'+(Number(s.regular_price_per_day)||0)+'" required></div>' +
-        '<div class="form-error" id="epErr"></div>' +
-        '<div class="form-actions">' +
-          '<button type="button" class="btn ghost" id="epCancel">ยกเลิก</button>' +
-          '<button type="submit" class="btn primary">บันทึก</button>' +
-        '</div>' +
-      '</form>' +
-      '</div></div>';
-    var back = document.getElementById('mb');
-    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
-    document.getElementById('epCancel').onclick = closeModal;
-    document.getElementById('priceForm').addEventListener('submit', function(e){
-      e.preventDefault();
-      var guest = parseFloat(document.getElementById('epGuest').value);
-      var regular = parseFloat(document.getElementById('epRegular').value);
-      var errEl = document.getElementById('epErr');
-      if (!(guest>=0) || !(regular>=0)){ errEl.textContent = 'กรุณากรอกราคาที่ถูกต้อง'; return; }
-      apiPut('/api/stalls/' + stallId, { pricePerDay: guest, regularPricePerDay: regular, zoneId: document.getElementById('epZone').value })
-        .then(function(){ toast('บันทึกล็อกแล้ว'); closeModal(); loadPublicData(); })
-        .catch(function(err){ errEl.textContent = (err && err.error) || 'บันทึกล็อกไม่สำเร็จ'; });
+  function renderUserAdmin(panel, tab){
+    var roleId = USER_TABS[tab] || ROLE.VENDOR;
+    var isVendor = roleId === ROLE.VENDOR;
+    var q = state.userQuery;
+    var list = state.users.filter(function(u){
+      return u.roleId === roleId && matches(q, [u.name, u.phone, u.username, u.lineId, u.address]);
     });
-  }
-
-  function renderVendorAdmin(panel){
-    if (!state.vendors.length){
-      panel.innerHTML = '<div class="empty"><div class="big">🧑‍🌾</div>ยังไม่มีผู้ขาย — จะแสดงที่นี่หลังจากจองครั้งแรก</div>';
-      return;
-    }
-    var rows = state.vendors.map(function(v){
-      var blocked = !v.active;
-      var regular = !!v.is_regular;
-      var cats = v.categories ? v.categories.split(',') : [v.category];
-      var foods = v.food_types ? v.food_types.split(',').map(foodTypeLabel) : [];
-      var goods = cats.map(function(id){ var m = categoryMeta(id); return m.icon + ' ' + esc(m.label); }).join('<br>') +
-        (foods.length ? '<div class="muted small">อาหาร: ' + esc(foods.join(', ')) + '</div>' : '');
-      return '<tr><td>'+esc(v.name)+(regular?' <span class="pill on-primary small">ลูกค้าประจำ</span>':'')+'</td><td>'+esc(v.phone)+'</td>' +
-        '<td>'+goods+'</td>' +
-        '<td>'+v.booking_total+' ครั้ง · อนุมัติ '+v.booking_approved+'</td>' +
-        '<td>'+fmtDate((v.joined_at||todayStr()).slice(0,10))+'</td>' +
-        '<td><span class="badge '+(blocked?'cancelled':'approved')+'">'+(blocked?'ถูกระงับ':'ใช้งานอยู่')+'</span></td>' +
-        '<td><button type="button" class="btn small ghost" data-regulartoggle="'+esc(v.id)+'">'+(regular?'ยกเลิกลูกค้าประจำ':'ตั้งเป็นลูกค้าประจำ')+'</button> ' +
-        '<button type="button" class="btn small '+(blocked?'primary':'danger')+'" data-vendortoggle="'+esc(v.id)+'">'+(blocked?'ยกเลิกระงับ':'ระงับ')+'</button></td></tr>';
+    var rows = list.map(function(u){
+      var isMe = u.id === profile.userId;
+      return '<tr><td>'+esc(u.name)+(isMe?' <span class="pill on-primary small">คุณ</span>':'')+(u.isRegular?' <span class="pill on-primary small">ขาประจำ</span>':'') +
+          '<br><span class="muted small">'+(u.username ? esc(u.username) : (isVendor ? 'ไม่มีบัญชีเข้าสู่ระบบ' : ''))+'</span></td>' +
+        '<td>'+esc(u.phone || '—')+'</td>' +
+        '<td class="small">'+esc(u.address || '—')+'</td>' +
+        '<td>'+esc(u.lineId || '—')+'</td>' +
+        (isVendor ? '<td class="small">'+(u.category ? esc(goodsLabel(u.category, u.foodType)) : '<span class="muted">—</span>')+'</td>' +
+          '<td class="small">'+u.bookingTotal+' ครั้ง<br><span class="muted">อนุมัติ '+u.bookingApproved+'</span></td>' : '') +
+        '<td><span class="badge '+(u.active?'approved':'cancelled')+'">'+(u.active?'ใช้งานอยู่':'ระงับ')+'</span></td>' +
+        '<td><button type="button" class="btn small ghost" data-edituser="'+u.id+'">แก้ไข</button>' +
+          (profile.isHeadAdmin && !isMe ? ' <button type="button" class="btn small danger" data-deluser="'+u.id+'">ลบ</button>' : '') +
+          (!profile.isHeadAdmin ? ' <button type="button" class="btn small '+(u.active?'danger':'primary')+'" data-toggleuser="'+u.id+'">'+(u.active?'ระงับ':'เปิดใช้')+'</button>' : '') +
+        '</td></tr>';
     }).join('');
-
+    var cols = isVendor ? 8 : 6;
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<p class="muted small" style="margin:0 0 12px">ลูกค้าประจำ (ขาประจำ) จะได้รับราคาพิเศษต่อวันสำหรับการจองครั้งถัดไป</p>' +
-      '<div class="table-wrap"><table><thead><tr><th>ผู้ขาย</th><th>เบอร์โทร</th><th>สินค้าที่ขาย</th><th>การจอง</th><th>วันที่เข้าร่วม</th><th>สถานะ</th><th></th></tr></thead>' +
-      '<tbody>'+rows+'</tbody></table></div></div>';
+      '<div class="toolbar-row">'+searchBoxHtml('userSearch', q, 'ค้นหาชื่อ / เบอร์โทรศัพท์ / ชื่อผู้ใช้')+'<span class="muted small">'+list.length+' คน</span>' +
+        '<button type="button" class="btn primary" id="uAdd">+ เพิ่ม'+ROLE_LABELS[roleId]+'</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>ชื่อ-นามสกุล</th><th>เบอร์โทร</th><th>ที่อยู่</th><th>Line ID</th>' +
+        (isVendor ? '<th>ประเภทสินค้า</th><th>การจอง</th>' : '') + '<th>สถานะ</th><th>จัดการ</th></tr></thead>' +
+      '<tbody>'+(rows || '<tr><td colspan="'+cols+'" class="empty">ไม่พบผู้ใช้</td></tr>')+'</tbody></table></div></div>';
+    bindSearch('userSearch', 'userQuery', function(){ renderUserAdmin(panel, tab); });
+    document.getElementById('uAdd').onclick = function(){ openUserModal(null, roleId); };
+    panel.querySelectorAll('[data-edituser]').forEach(function(btn){ btn.addEventListener('click', function(){ openUserModal(btn.dataset.edituser); }); });
+    panel.querySelectorAll('[data-deluser]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var u = state.users.find(function(x){ return String(x.id) === btn.dataset.deluser; });
+        confirmAction('ลบผู้ใช้ "' + (u ? u.name : '') + '"? ไม่สามารถย้อนกลับได้ (ผู้ใช้ที่มีประวัติการจองลบไม่ได้ ให้ระงับบัญชีแทน)', function(){
+          apiDelete('/api/users/' + btn.dataset.deluser)
+            .then(function(){ toast('ลบผู้ใช้แล้ว'); loadUsers(); })
+            .catch(function(err){ toast(err.error || 'ลบไม่สำเร็จ', true); });
+        });
+      });
+    });
+    panel.querySelectorAll('[data-toggleuser]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var u = state.users.find(function(x){ return String(x.id) === btn.dataset.toggleuser; });
+        apiPut('/api/users/' + u.id, { active: !u.active })
+          .then(function(){ toast(u.active ? 'ระงับบัญชีแล้ว' : 'เปิดใช้บัญชีแล้ว'); loadUsers(); })
+          .catch(function(err){ toast(err.error || 'อัปเดตไม่สำเร็จ', true); });
+      });
+    });
+  }
 
-    panel.querySelectorAll('[data-vendortoggle]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var v = state.vendors.find(function(x){ return x.id===btn.dataset.vendortoggle; });
-        apiPut('/api/vendors/' + encodeURIComponent(btn.dataset.vendortoggle), { active: !v.active, isRegular: !!v.is_regular })
-          .then(function(){ toast(v.active ? 'ระงับผู้ขายแล้ว' : 'ยกเลิกระงับผู้ขายแล้ว'); loadVendors(); })
-          .catch(function(){ toast('อัปเดตผู้ขายไม่สำเร็จ', true); });
-      });
-    });
-    panel.querySelectorAll('[data-regulartoggle]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var v = state.vendors.find(function(x){ return x.id===btn.dataset.regulartoggle; });
-        apiPut('/api/vendors/' + encodeURIComponent(btn.dataset.regulartoggle), { active: !!v.active, isRegular: !v.is_regular })
-          .then(function(){ toast(!v.is_regular ? 'ตั้งเป็นลูกค้าประจำแล้ว' : 'ยกเลิกลูกค้าประจำแล้ว'); loadVendors(); })
-          .catch(function(){ toast('อัปเดตผู้ขายไม่สำเร็จ', true); });
-      });
-    });
+  // ---------- 7.0 จัดการประกาศ ----------
+  function openAnnouncementModal(id){
+    var a = id ? state.announcements.find(function(x){ return String(x.id) === String(id); }) : null;
+    var typeOptions = ANNOUNCE_TYPES.map(function(t){ return '<option value="'+t.id+'"'+(a && a.type===t.id?' selected':'')+'>'+esc(t.label)+'</option>'; }).join('');
+    openFormModal(a ? 'แก้ไขประกาศ' : 'เพิ่มประกาศ', a ? '' : 'ประกาศใหม่จะเด้งขึ้นกลางจอของทุกคนที่เปิดเว็บอยู่ภายในประมาณ 10 วินาที',
+      '<div class="field"><label for="anTitle">หัวข้อ</label><input id="anTitle" maxlength="60" required value="'+esc(a ? a.title : '')+'" placeholder="ตลาดปิดช่วงสงกรานต์"></div>' +
+      '<div class="field"><label for="anType">ประเภท (สีของประกาศ)</label><select id="anType">'+typeOptions+'</select></div>' +
+      '<div class="field"><label for="anBody">ข้อความ</label><textarea id="anBody" rows="3" maxlength="300" required placeholder="รายละเอียดสำหรับผู้ค้า">'+esc(a ? a.body : '')+'</textarea></div>' +
+      '<label class="checkline"><input type="checkbox" id="anPin"'+(a && a.pinned?' checked':'')+'> ปักหมุดไว้บนสุด</label>' +
+      '<div><button type="button" class="btn small ghost" id="anPreview">ดูตัวอย่าง</button></div>',
+      function(f, errEl, btn){
+        var body = { title: fval('anTitle'), type: fval('anType'), body: fval('anBody'), pinned: document.getElementById('anPin').checked };
+        if (!body.title || !body.body){ errEl.textContent = 'กรุณากรอกหัวข้อและข้อความ'; return; }
+        btn.disabled = true;
+        (a ? apiPut('/api/announcements/' + a.id, body) : apiPost('/api/announcements', body))
+          .then(function(){ toast(a ? 'บันทึกประกาศแล้ว' : 'ยิงประกาศแล้ว'); closeModal(); loadPublicData(); })
+          .catch(function(err){ errEl.textContent = err.error || 'บันทึกประกาศไม่สำเร็จ'; btn.disabled = false; });
+      }, a ? 'บันทึก' : 'ยิงประกาศ');
+    document.getElementById('anPreview').onclick = function(){
+      if (!fval('anTitle') || !fval('anBody')){ toast('กรอกหัวข้อและข้อความก่อนดูตัวอย่าง', true); return; }
+      previewAnnouncement({ title: fval('anTitle'), body: fval('anBody'), type: fval('anType') });
+    };
   }
 
   function renderAnnouncementAdmin(panel){
-    var typeOptions = ANNOUNCE_TYPES.map(function(t){ return '<option value="'+t.id+'">'+esc(t.label)+'</option>'; }).join('');
-    var rows = state.announcements.map(function(a){
+    var q = state.annQuery;
+    var list = state.announcements.filter(function(a){ return matches(q, [a.title, a.body, announceTypeLabel(a.type)]); });
+    var rows = list.map(function(a){
       var cls = a.type==='rule' ? 'rejected' : a.type==='holiday' ? 'pending' : a.type==='event' ? 'approved' : 'cancelled';
-      return '<tr><td><span class="badge '+cls+'">'+esc(announceTypeLabel(a.type))+'</span></td>' +
+      return '<tr><td><span class="badge '+cls+'">'+esc(announceTypeLabel(a.type))+'</span>'+(a.pinned?'<br><span class="pill small">📌 ปักหมุด</span>':'')+'</td>' +
         '<td>'+esc(a.title)+'<br><span class="muted small">'+esc(a.body)+'</span></td>' +
-        '<td>'+fmtDate((a.created_at||todayStr()).slice(0,10))+'</td>' +
+        '<td>'+fmtDate((a.created_at||todayStr()).slice(0,10))+(a.created_by_name?'<br><span class="muted small">'+esc(a.created_by_name)+'</span>':'')+'</td>' +
         '<td><button type="button" class="btn small ghost" data-previewannounce="'+a.id+'">ดูตัวอย่าง</button> ' +
+        '<button type="button" class="btn small ghost" data-editannounce="'+a.id+'">แก้ไข</button> ' +
         '<button type="button" class="btn small danger" data-delannounce="'+a.id+'">ลบ</button></td></tr>';
     }).join('');
-
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="add-row" style="flex-direction:column; align-items:stretch">' +
-        '<p class="muted small" style="margin:0">ประกาศจะเด้งขึ้นกลางจอของทุกคนที่เปิดเว็บอยู่ภายในประมาณ 10 วินาที แสดงครั้งเดียวต่อเครื่อง ' +
-          'คนที่เข้าเว็บภายหลังจะเห็นประกาศล่าสุดถ้ายิงไปไม่เกิน 12 ชั่วโมง</p>' +
-        '<div class="field-row">' +
-          '<div class="field"><label for="anTitle">หัวข้อ (ตัวใหญ่กลางจอ)</label><input id="anTitle" maxlength="60" placeholder="ตลาดปิดช่วงสงกรานต์"></div>' +
-          '<div class="field"><label for="anType">ประเภท (สีของประกาศ)</label><select id="anType">'+typeOptions+'</select></div>' +
-        '</div>' +
-        '<div class="field"><label for="anBody">ข้อความใต้หัวข้อ</label><textarea id="anBody" rows="2" maxlength="200" placeholder="รายละเอียดสำหรับผู้ขาย"></textarea></div>' +
-        '<div class="row-actions"><button type="button" class="btn ghost" id="anPreview">ดูตัวอย่าง</button><button type="button" class="btn primary" id="anAdd">ยิงประกาศ</button></div>' +
-      '</div>' +
-      '<div class="section-head" style="margin:18px 0 8px"><h2 style="font-size:1rem">ประกาศที่ยิงไปแล้ว</h2></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>ประเภท</th><th>ประกาศ</th><th>วันที่</th><th></th></tr></thead>' +
-      '<tbody>'+(rows||'<tr><td colspan="4" class="empty">ยังไม่มีประกาศ</td></tr>')+'</tbody></table></div>' +
-      '</div>';
-
-    document.getElementById('anPreview').onclick = function(){
-      var title = document.getElementById('anTitle').value.trim();
-      var body = document.getElementById('anBody').value.trim();
-      if (!title || !body){ toast('กรอกหัวข้อและข้อความก่อนดูตัวอย่าง', true); return; }
-      previewAnnouncement({ title:title, body:body, type:document.getElementById('anType').value });
-    };
-
-    var anAddBtn = document.getElementById('anAdd');
-    anAddBtn.onclick = function(){
-      var title = document.getElementById('anTitle').value.trim();
-      var type = document.getElementById('anType').value;
-      var body = document.getElementById('anBody').value.trim();
-      if (!title || !body){ toast('กรุณากรอกหัวข้อและข้อความ', true); return; }
-      anAddBtn.disabled = true;
-      apiPost('/api/announcements', { title:title, type:type, body:body })
-        .then(function(){
-          toast('ยิงประกาศแล้ว');
-          document.getElementById('anTitle').value='';
-          document.getElementById('anBody').value='';
-          loadPublicData();
-        })
-        .catch(function(err){ toast(err.error || 'ยิงประกาศไม่สำเร็จ', true); })
-        .then(function(){ anAddBtn.disabled = false; });
-    };
+      '<div class="toolbar-row">'+searchBoxHtml('annSearch', q, 'ค้นหาประกาศ')+'<span class="muted small">'+list.length+' รายการ</span>' +
+        '<button type="button" class="btn primary" id="anAdd">+ เพิ่มประกาศ</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>ประเภท</th><th>ประกาศ</th><th>วันที่</th><th>จัดการ</th></tr></thead>' +
+      '<tbody>'+(rows||'<tr><td colspan="4" class="empty">ไม่พบประกาศ</td></tr>')+'</tbody></table></div></div>';
+    bindSearch('annSearch', 'annQuery', function(){ renderAnnouncementAdmin(panel); });
+    document.getElementById('anAdd').onclick = function(){ openAnnouncementModal(null); };
+    panel.querySelectorAll('[data-editannounce]').forEach(function(btn){ btn.addEventListener('click', function(){ openAnnouncementModal(btn.dataset.editannounce); }); });
     panel.querySelectorAll('[data-previewannounce]').forEach(function(btn){
       btn.addEventListener('click', function(){
         var a = state.announcements.find(function(x){ return String(x.id)===btn.dataset.previewannounce; });
@@ -2261,10 +2666,28 @@
     });
   }
 
-  function renderAuditAdmin(panel){
+  // ---------- 6.0 ตรวจสอบตลาด ----------
+  function renderAuditAdmin(panel, tab){
+    if (tab === 'fines'){
+      var q = state.fineQuery;
+      var fines = (state.auditLogs || []).filter(function(l){ return matches(q, [l.vendor_name, l.stall_code, l.fine_reason, l.date]); });
+      var total = fines.reduce(function(s, l){ return s + (Number(l.fine_amount) || 0); }, 0);
+      var finesRows = fines.map(function(l){
+        return '<tr><td>'+fmtDate(l.date)+'</td><td>'+esc(l.vendor_name)+'<br><span class="muted small">'+esc(l.vendor_phone||'')+'</span></td><td class="mono">'+esc(l.stall_code||'—')+'</td>' +
+          '<td>'+(l.present?'มาขาย':'ไม่มาขาย')+' · '+(l.category_match?'สินค้าตรง':'สินค้าไม่ตรง')+'</td>' +
+          '<td class="mono">'+fmtMoney(l.fine_amount)+'</td><td>'+esc(l.fine_reason||'')+'</td><td class="small">'+esc(l.inspected_by_name||'')+'</td>' +
+          '<td><button type="button" class="btn small danger" data-delinspect="'+l.id+'">ลบ</button></td></tr>';
+      }).join('');
+      panel.innerHTML = '<div class="card" style="padding:16px">' +
+        '<div class="toolbar-row">'+searchBoxHtml('fineSearch', q, 'ค้นหาชื่อผู้ค้า รหัสล็อก หรือเหตุผล')+'<span class="muted small">'+fines.length+' รายการ · รวม '+fmtMoney(total)+'</span></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>วันที่</th><th>ผู้ค้า</th><th>ล็อก</th><th>ผลตรวจ</th><th>ค่าปรับ</th><th>เหตุผล</th><th>ผู้ตรวจ</th><th></th></tr></thead>' +
+        '<tbody>'+(finesRows || '<tr><td colspan="8" class="empty">ไม่พบค่าปรับ</td></tr>')+'</tbody></table></div></div>';
+      bindSearch('fineSearch', 'fineQuery', function(){ renderAuditAdmin(panel, tab); });
+      wireDeleteInspection(panel);
+      return;
+    }
     var date = state.auditDate || todayStr();
     var covering = state.auditBookings || [];
-
     var rows = covering.map(function(b){
       var log = b.audit;
       var present = log ? !!log.present : true;
@@ -2272,50 +2695,45 @@
       var fine = log ? (Number(log.fine_amount)||0) : 0;
       var reason = log ? (log.fine_reason||'') : '';
       return '<tr data-bookingid="'+b.id+'">' +
-        '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'</td>' +
+        '<td class="mono">'+esc(b.stall_code||'—')+'</td>' +
         '<td>'+esc(b.vendor_name)+'</td>' +
-        '<td>'+esc(categoryMeta(b.category).label)+'</td>' +
+        '<td class="small">'+esc(anyCategoryLabel(b.category_id))+'</td>' +
         '<td><select class="au-present"><option value="1" '+(present?'selected':'')+'>มาขาย</option><option value="0" '+(!present?'selected':'')+'>ไม่มาขาย</option></select></td>' +
         '<td><select class="au-catmatch"><option value="1" '+(catMatch?'selected':'')+'>ตรงกัน</option><option value="0" '+(!catMatch?'selected':'')+'>ไม่ตรงกัน</option></select></td>' +
         '<td><input type="number" class="au-fine" min="0" step="10" value="'+fine+'" style="width:84px"></td>' +
         '<td><input type="text" class="au-reason" value="'+esc(reason)+'" placeholder="เหตุผล" style="width:130px"></td>' +
-        '<td><button type="button" class="btn small primary au-save">บันทึก</button></td></tr>';
+        '<td><button type="button" class="btn small primary au-save">'+(log?'แก้ไขผล':'บันทึก')+'</button>' +
+          (log ? ' <button type="button" class="btn small danger" data-delinspect="'+log.id+'">ลบ</button><br><span class="muted small">บันทึกแล้ว</span>' : '')+'</td></tr>';
     }).join('');
-
-    var fines = state.auditLogs || [];
-    var finesRows = fines.map(function(l){
-      return '<tr><td>'+fmtDate(l.date)+'</td><td>'+esc(l.vendor_name)+'</td><td class="mono">'+esc(l.stall_code||'—')+'</td>' +
-        '<td>'+fmtMoney(l.fine_amount)+'</td><td>'+esc(l.fine_reason||'')+'</td></tr>';
-    }).join('');
-
-    panel.innerHTML =
-      '<div class="card" style="padding:16px">' +
-        '<div class="field" style="max-width:200px"><label for="auDate">วันที่ตรวจสอบ</label><input type="date" id="auDate" value="'+date+'"></div>' +
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+        '<div class="field" style="max-width:200px"><label for="auDate">วันที่ตรวจ</label><input type="date" id="auDate" value="'+date+'"></div>' +
         (covering.length ?
-          '<div class="table-wrap"><table><thead><tr><th>ล็อก</th><th>ผู้ขาย</th><th>ลงทะเบียนเป็น</th><th>มาขาย</th><th>ประเภทสินค้า</th><th>ค่าปรับ (฿)</th><th>เหตุผล</th><th></th></tr></thead>' +
+          '<div class="table-wrap"><table><thead><tr><th>ล็อก</th><th>ผู้ค้า</th><th>จองขาย</th><th>มาขาย</th><th>ประเภทสินค้า</th><th>ค่าปรับ (฿)</th><th>เหตุผล</th><th></th></tr></thead>' +
           '<tbody>'+rows+'</tbody></table></div>'
           : '<div class="empty small">ไม่มีการจองที่อนุมัติแล้วในวันนี้</div>') +
-      '</div>' +
-      '<div class="card" style="padding:16px; margin-top:16px">' +
-        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">ค่าปรับล่าสุด</h2></div>' +
-        (fines.length ? '<div class="table-wrap"><table><thead><tr><th>วันที่</th><th>ผู้ขาย</th><th>ล็อก</th><th>ค่าปรับ</th><th>เหตุผล</th></tr></thead><tbody>'+finesRows+'</tbody></table></div>' : '<div class="empty small">ยังไม่มีค่าปรับ</div>') +
       '</div>';
-
-    document.getElementById('auDate').addEventListener('change', function(){
-      loadAudit(this.value);
-    });
-
+    document.getElementById('auDate').addEventListener('change', function(){ loadAudit(this.value); });
     panel.querySelectorAll('.au-save').forEach(function(btn){
       btn.addEventListener('click', function(){
         var tr = btn.closest('tr');
-        var bookingId = tr.dataset.bookingid;
-        var present = tr.querySelector('.au-present').value === '1';
-        var catMatch = tr.querySelector('.au-catmatch').value === '1';
-        var fineAmount = parseFloat(tr.querySelector('.au-fine').value) || 0;
-        var fineReason = tr.querySelector('.au-reason').value.trim();
-        apiPut('/api/audit', { bookingId:bookingId, date:date, present:present, categoryMatch:catMatch, fineAmount:fineAmount, fineReason:fineReason||null })
-          .then(function(){ toast('บันทึกการตรวจสอบแล้ว'); loadAudit(date); loadFines(); })
-          .catch(function(err){ toast(err.error || 'บันทึกการตรวจสอบไม่สำเร็จ', true); });
+        apiPut('/api/inspections', {
+          bookingId: Number(tr.dataset.bookingid), date: date,
+          present: tr.querySelector('.au-present').value === '1', categoryMatch: tr.querySelector('.au-catmatch').value === '1',
+          fineAmount: parseFloat(tr.querySelector('.au-fine').value) || 0, fineReason: tr.querySelector('.au-reason').value.trim() || null
+        }).then(function(){ toast('บันทึกผลตรวจแล้ว'); loadAudit(date); loadFines(); })
+          .catch(function(err){ toast(err.error || 'บันทึกผลตรวจไม่สำเร็จ', true); });
+      });
+    });
+    wireDeleteInspection(panel);
+  }
+  function wireDeleteInspection(panel){
+    panel.querySelectorAll('[data-delinspect]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        confirmAction('ลบผลการตรวจนี้?', function(){
+          apiDelete('/api/inspections/' + btn.dataset.delinspect)
+            .then(function(){ toast('ลบผลการตรวจแล้ว'); loadAudit(state.auditDate || todayStr()); loadFines(); })
+            .catch(function(err){ toast(err.error || 'ลบไม่สำเร็จ', true); });
+        });
       });
     });
   }
@@ -2486,7 +2904,7 @@
         var z = s && zoneById(s.zone_id);
         return {
           clickable: true,
-          color: z ? ZONE_COLORS[(z.color_index||0)%4] : 'var(--zone-2)',
+          color: z ? zoneColor(z) : 'var(--zone-2)',
           label: s ? s.code : '?',
           title: (s ? s.code : '') + (z ? ' · ' + z.name : '')
         };
@@ -2574,7 +2992,7 @@
     var saveBtn = document.getElementById('mapSave');
     saveBtn.addEventListener('click', function(){
       saveBtn.disabled = true;
-      apiPut('/api/settings/map', { cols:L.cols, rows:L.rows, items:L.items })
+      apiPut('/api/layout', { cols:L.cols, rows:L.rows, items:L.items })
         .then(function(res){
           state.settings.mapLayout = res.mapLayout;
           state.mapDraft = cloneLayout(res.mapLayout);
@@ -2604,40 +3022,68 @@
     });
   }
 
-  function renderSettingsAdmin(panel){
-    var qrUrl = state.settings.promptPayQrUrl;
-    panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">QR โค้ดพร้อมเพย์</h2></div>' +
-      '<p class="muted small" style="margin:0 0 12px">แสดงให้ผู้ขายเห็นตอนชำระค่าเช่า เฉพาะแอดมินใหญ่เท่านั้นที่แก้ไขได้</p>' +
-      (qrUrl
-        ? '<img class="qr-preview receipt-thumb" style="width:150px;height:150px" src="'+esc(qrUrl)+'" data-full="'+esc(qrUrl)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ปัจจุบัน แตะเพื่อขยาย">'
-        : '<div class="empty small" style="padding:16px 0">ยังไม่มี QR โค้ด</div>') +
-      '<div style="margin-top:14px">' +
-      (profile.isHeadAdmin
-        ? '<button type="button" class="btn primary" id="qrUploadBtn">'+(qrUrl?'เปลี่ยน QR โค้ด':'อัปโหลด QR โค้ด')+'</button>'
-        : '<span class="muted small">🔒 เฉพาะบัญชีแอดมินใหญ่เท่านั้นที่อัปโหลดหรือเปลี่ยนรูปนี้ได้</span>') +
-      '</div>' +
-      '</div>' +
-      '<div class="card" style="padding:16px">' +
-        '<div class="section-head" style="margin-bottom:8px"><h2 style="font-size:1rem">สำรองข้อมูล</h2></div>' +
-        (profile.isHeadAdmin
-          ? '<p class="muted small" style="margin:0 0 12px">ดาวน์โหลดข้อมูลทั้งหมด (การจอง ผู้ขาย บัญชี ผังตลาด ประกาศ และรูปสลิป/QR) เก็บไว้ในเครื่อง แนะนำให้ทำอย่างน้อยสัปดาห์ละครั้ง ' +
-            'ไฟล์นี้มีเบอร์โทรและรหัสผ่านที่เข้ารหัสแล้ว อย่าส่งต่อหรืออัปโหลดขึ้นที่สาธารณะ</p>' +
-            '<div class="row-actions" style="flex-wrap:wrap">' +
-              '<button type="button" class="btn primary" id="backupFull">ดาวน์โหลดไฟล์สำรอง (รวมรูป)</button>' +
-              '<button type="button" class="btn ghost" id="backupLite">ดาวน์โหลดแบบไม่รวมรูป</button>' +
-              '<button type="button" class="btn danger" id="backupRestore">กู้คืนจากไฟล์สำรอง</button>' +
-            '</div>'
-          : '<span class="muted small">🔒 เฉพาะบัญชีแอดมินใหญ่เท่านั้นที่สำรองและกู้คืนข้อมูลได้</span>') +
-      '</div>';
-
-    wireReceiptThumbs(panel);
-    if (profile.isHeadAdmin){
-      document.getElementById('qrUploadBtn').onclick = requestQrUpload;
+  // ---------- 9.0 ตั้งค่าระบบ (และ 1.4 กำหนดสิทธิ์การใช้งาน) ----------
+  function renderSettingsAdmin(panel, tab){
+    if (tab === 'roles') return renderRolesAdmin(panel);
+    if (tab === 'backup'){
+      panel.innerHTML = '<div class="card" style="padding:16px">' +
+        '<p class="muted small" style="margin:0 0 12px">ดาวน์โหลดข้อมูลทั้งหมดทั้ง 12 ตาราง (ผู้ใช้ สิทธิ์ ประเภทสินค้า โซน ล็อก แผนผัง การจอง การชำระเงิน การตรวจตลาด ประกาศ และรูปสลิป/QR) ' +
+          'เก็บไว้ในเครื่อง แนะนำให้ทำอย่างน้อยสัปดาห์ละครั้ง ไฟล์นี้มีข้อมูลส่วนบุคคลและรหัสผ่านที่เข้ารหัสแล้ว อย่าส่งต่อหรืออัปโหลดขึ้นที่สาธารณะ</p>' +
+        '<div class="row-actions" style="flex-wrap:wrap">' +
+          '<button type="button" class="btn primary" id="backupFull">ดาวน์โหลดไฟล์สำรอง (รวมรูป)</button>' +
+          '<button type="button" class="btn ghost" id="backupLite">ดาวน์โหลดแบบไม่รวมรูป</button>' +
+          '<button type="button" class="btn danger" id="backupRestore">กู้คืนจากไฟล์สำรอง</button>' +
+        '</div></div>';
       document.getElementById('backupFull').onclick = function(){ downloadBackup(true, this); };
       document.getElementById('backupLite').onclick = function(){ downloadBackup(false, this); };
       document.getElementById('backupRestore').onclick = function(){ ensureRestoreInput().click(); };
+      return;
     }
+    var qrUrl = state.settings.promptPayQrUrl;
+    panel.innerHTML = '<div class="card" style="padding:16px">' +
+      '<p class="muted small" style="margin:0 0 12px">แสดงให้ผู้ค้าเห็นตอนชำระค่าเช่า</p>' +
+      (qrUrl
+        ? '<img class="qr-preview receipt-thumb" style="width:150px;height:150px" src="'+esc(qrUrl)+'" data-full="'+esc(qrUrl)+'" data-title="QR โค้ดพร้อมเพย์" alt="QR โค้ดพร้อมเพย์ปัจจุบัน แตะเพื่อขยาย">'
+        : '<div class="empty small" style="padding:16px 0">ยังไม่มี QR โค้ด</div>') +
+      '<div style="margin-top:14px"><button type="button" class="btn primary" id="qrUploadBtn">'+(qrUrl?'เปลี่ยน QR โค้ด':'อัปโหลด QR โค้ด')+'</button></div>' +
+      '</div>';
+    wireReceiptThumbs(panel);
+    document.getElementById('qrUploadBtn').onclick = requestQrUpload;
+  }
+
+  // 1.4 กำหนดสิทธิ์การใช้งาน: which menus each role opens (roles.menu_access).
+  function renderRolesAdmin(panel){
+    var roles = state.roles || [];
+    if (!roles.length){ panel.innerHTML = '<div class="empty"><div class="big">⏳</div>กำลังโหลดสิทธิ์…</div>'; return; }
+    var cards = roles.map(function(r){
+      var editable = r.id === ROLE.STAFF && profile.isHeadAdmin;
+      var menus = r.id === ROLE.VENDOR
+        ? '<p class="muted small">ใช้งานหน้า "ผังตลาด" และ "การจองของฉัน" (จองล็อก ชำระเงิน ติดตามการจอง แก้ไขข้อมูลส่วนตัว)</p>'
+        : '<div class="check-grid">' + ADMIN_MENUS.map(function(m){
+            var on = r.menus.indexOf(m.key) !== -1;
+            var lock = !editable || m.key === 'settings';
+            return '<label class="check-chip"><input type="checkbox" name="roleMenu'+r.id+'" value="'+m.key+'"'+(on?' checked':'')+(lock?' disabled':'')+'>'+m.icon+' '+m.label+'</label>';
+          }).join('') + '</div>' +
+          (r.id === ROLE.ADMIN ? '<p class="muted small">ผู้ดูแลระบบเข้าถึงได้ทุกเมนูเสมอ</p>' : '<p class="muted small">เมนูตั้งค่าระบบสงวนไว้สำหรับผู้ดูแลระบบ</p>');
+      return '<div class="card role-card" style="padding:16px">' +
+        '<div class="section-head" style="margin-bottom:6px"><h2 style="font-size:1rem">'+esc(r.name)+'</h2><span class="muted small">role_id '+r.id+'</span></div>' +
+        '<div class="field"><label for="roleDesc'+r.id+'">คำอธิบายสิทธิ์</label><input id="roleDesc'+r.id+'" value="'+esc(r.description)+'"'+(profile.isHeadAdmin?'':' disabled')+'></div>' +
+        menus +
+        (profile.isHeadAdmin ? '<div class="row-actions"><button type="button" class="btn small primary" data-saverole="'+r.id+'">บันทึกสิทธิ์</button></div>' : '') +
+        '</div>';
+    }).join('');
+    panel.innerHTML = '<p class="muted small" style="margin:0 0 12px">กำหนดว่าผู้ใช้แต่ละประเภทเข้าเมนูใดได้บ้าง เมื่อบันทึกแล้วจะมีผลกับผู้ใช้ทันที</p>' + cards;
+    panel.querySelectorAll('[data-saverole]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = Number(btn.dataset.saverole);
+        var body = { description: fval('roleDesc' + id) };
+        if (id === ROLE.STAFF) body.menus = checkedValues(panel, 'roleMenu' + id);
+        btn.disabled = true;
+        apiPut('/api/roles/' + id, body)
+          .then(function(){ toast('บันทึกสิทธิ์แล้ว'); loadRoles(); })
+          .catch(function(err){ toast(err.error || 'บันทึกสิทธิ์ไม่สำเร็จ', true); btn.disabled = false; });
+      });
+    });
   }
 
   // ---------- backup / restore ----------
@@ -2680,11 +3126,11 @@
           if (!backup || backup.format !== 'talat-pinklao-backup' || !backup.tables){ toast('ไม่ใช่ไฟล์สำรองข้อมูลของระบบนี้', true); return; }
           var t = backup.tables;
           var count = function(name){ return Array.isArray(t[name]) ? t[name].length : 0; };
-          var files = Array.isArray(backup.files) ? backup.files : [];
+          var files = Array.isArray(backup.images) ? backup.images : [];
           var when = backup.createdAt ? new Date(backup.createdAt).toLocaleString('th-TH') : '-';
           confirmAction(
             'ข้อมูลปัจจุบันทั้งหมดจะถูกแทนที่ด้วยไฟล์สำรองวันที่ ' + when + ' ' +
-            '(การจอง ' + count('bookings') + ', ผู้ขาย ' + count('vendors') + ', ล็อก ' + count('stalls') + ', แอดมิน ' + count('admins') + ', รูป ' + files.length + ') ' +
+            '(ผู้ใช้ ' + count('users') + ', การจอง ' + count('bookings') + ', การชำระเงิน ' + count('payments') + ', ล็อก ' + count('stalls') + ', รูป ' + files.length + ') ' +
             (backup.includesImages ? '' : 'ไฟล์นี้ไม่มีรูป สลิปและ QR เดิมจะหาย ') +
             'แนะนำให้ดาวน์โหลดไฟล์สำรองของข้อมูลปัจจุบันเก็บไว้ก่อน หลังกู้คืนต้องเข้าสู่ระบบใหม่',
             function(){ runRestore(backup, files); },
@@ -2708,7 +3154,7 @@
         return fetch('/api/backup/restore-files', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + res.restoreToken },
-          body: JSON.stringify({ files: batch })
+          body: JSON.stringify({ images: batch })
         }).then(function(r){
           if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(d){ throw { error: d.error || 'อัปโหลดรูปไม่สำเร็จ' }; });
           return r.json();
@@ -2742,79 +3188,19 @@
     });
   }
 
-  function renderAdminAccounts(panel){
-    if (!profile.isHeadAdmin){
-      panel.innerHTML = '<div class="empty"><div class="big">🔒</div>เฉพาะแอดมินใหญ่เท่านั้นที่จัดการบัญชีเจ้าหน้าที่ได้</div>';
-      return;
-    }
-    var rows = state.admins.map(function(a){
-      var isMe = a.username === profile.adminUsername;
-      var deactivated = !a.active;
-      return '<tr><td>'+esc(a.name)+(isMe?' <span class="pill on-primary small">คุณ</span>':'')+'</td>' +
-        '<td class="mono">'+esc(a.username)+'</td>' +
-        '<td><span class="badge '+(a.role==='head'?'approved':'pending')+'">'+(a.role==='head'?'แอดมินใหญ่':'เจ้าหน้าที่')+'</span></td>' +
-        '<td><span class="badge '+(deactivated?'cancelled':'approved')+'">'+(deactivated?'ปิดใช้งาน':'ใช้งานอยู่')+'</span></td>' +
-        '<td>'+(isMe ? '<span class="muted small">—</span>' : '<button type="button" class="btn small '+(deactivated?'primary':'danger')+'" data-admintoggle="'+esc(a.username)+'">'+(deactivated?'เปิดใช้งานอีกครั้ง':'ปิดใช้งาน')+'</button>') +
-        '</td></tr>';
-    }).join('');
-
-    panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="table-wrap"><table><thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>บทบาท</th><th>สถานะ</th><th></th></tr></thead>' +
-      '<tbody>'+(rows||'<tr><td colspan="5" class="empty">ยังไม่มีบัญชีแอดมิน</td></tr>')+'</tbody></table></div>' +
-      '<div class="add-row" style="margin-top:14px; flex-direction:column; align-items:stretch">' +
-        '<div class="field-row">' +
-          '<div class="field"><label for="adName">ชื่อ-นามสกุล</label><input id="adName" placeholder="สมชาย ใจดี"></div>' +
-          '<div class="field"><label for="adUser">ชื่อผู้ใช้</label><input id="adUser" placeholder="somchai"></div>' +
-        '</div>' +
-        '<div class="field-row">' +
-          '<div class="field"><label for="adPass">รหัสผ่าน</label><input id="adPass" type="password" placeholder="ตั้งรหัสผ่าน"></div>' +
-          '<div class="field"><label for="adRole">บทบาท</label><select id="adRole"><option value="staff">เจ้าหน้าที่</option><option value="head">แอดมินใหญ่</option></select></div>' +
-        '</div>' +
-        '<div class="form-error" id="adErr"></div>' +
-        '<div><button type="button" class="btn primary" id="adAdd">สร้างบัญชี</button></div>' +
-      '</div></div>';
-
-    var adAddBtn = document.getElementById('adAdd');
-    adAddBtn.onclick = function(){
-      var name = document.getElementById('adName').value.trim();
-      var username = document.getElementById('adUser').value.trim();
-      var password = document.getElementById('adPass').value;
-      var role = document.getElementById('adRole').value;
-      var errEl = document.getElementById('adErr');
-      if (!name || !username || !password){ errEl.textContent = 'กรุณากรอกชื่อ ชื่อผู้ใช้ และรหัสผ่านให้ครบ'; return; }
-      adAddBtn.disabled = true;
-      apiPost('/api/admins', { name:name, username:username, password:password, role:role })
-        .then(function(){
-          toast('สร้างบัญชีให้ ' + name + ' แล้ว');
-          errEl.textContent = '';
-          document.getElementById('adName').value='';
-          document.getElementById('adUser').value='';
-          document.getElementById('adPass').value='';
-          loadAdmins();
-        })
-        .catch(function(err){ errEl.textContent = err.error || 'สร้างบัญชีไม่สำเร็จ'; })
-        .then(function(){ adAddBtn.disabled = false; });
-    };
-    panel.querySelectorAll('[data-admintoggle]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var a = state.admins.find(function(x){ return x.username===btn.dataset.admintoggle; });
-        apiPut('/api/admins/' + encodeURIComponent(btn.dataset.admintoggle), { active: !a.active })
-          .then(function(){ toast(a.active ? 'ปิดใช้งานบัญชีแล้ว' : 'เปิดใช้งานบัญชีอีกครั้งแล้ว'); loadAdmins(); })
-          .catch(function(){ toast('อัปเดตบัญชีไม่สำเร็จ', true); });
-      });
-    });
-  }
-
   // ---------- boot ----------
   var resizeTimer = null;
   window.addEventListener('resize', function(){
-    if (state.activeTab !== 'admin' || state.adminSection !== 'summary') return;
+    if (state.activeTab !== 'admin' || state.adminMenu !== 'reports') return;
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(render, 200);
   });
+  if (profile.isAdmin) state.adminMenu = firstMenu();
   render();
   loadPublicData();
-  loadMyBookings();
+  refreshSession().then(function(){
+    if (profile.isAdmin) refreshAdminData(); else loadMyBookings();
+  });
   setInterval(function(){
     var ae = document.activeElement;
     if (state.mapInteracting || (ae && ae.matches && ae.matches('main input, main textarea'))) return;

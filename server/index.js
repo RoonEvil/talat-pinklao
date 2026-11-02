@@ -11,16 +11,19 @@ const smallJson = express.json({ limit: '200kb' });
 // Backup restore parses its own (larger) bodies after authentication.
 app.use((req, res, next) => (req.path.startsWith('/api/backup') ? next() : smallJson(req, res, next)));
 
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/zones', require('./routes/zones'));
-app.use('/api/stalls', require('./routes/stalls'));
-app.use('/api/bookings', require('./routes/bookings'));
-app.use('/api/vendors', require('./routes/vendors'));
-app.use('/api/announcements', require('./routes/announcements'));
-app.use('/api/audit', require('./routes/audit'));
-app.use('/api/admins', require('./routes/admins'));
-app.use('/api/settings', require('./routes/settings'));
-app.use('/api/backup', require('./routes/backup'));
+// One router per part of the system (processes 1.0–9.0 in the design).
+app.use('/api/auth', require('./routes/auth'));               // 1.1–1.2 สมัครสมาชิก / เข้าสู่ระบบ
+app.use('/api/users', require('./routes/users'));             // 1.3 จัดการข้อมูลผู้ใช้
+app.use('/api/roles', require('./routes/roles'));             // 1.4 กำหนดสิทธิ์การใช้งาน
+app.use('/api/categories', require('./routes/categories'));   // 2.1 ประเภทสินค้า
+app.use('/api/zones', require('./routes/zones'));             // 2.1 โซน
+app.use('/api/stalls', require('./routes/stalls'));           // 2.2 ล็อกและราคา
+app.use('/api/layout', require('./routes/layout'));           // 2.3 แผนผังตลาด
+app.use('/api/bookings', require('./routes/bookings'));       // 3.0–5.0 จอง อนุมัติ ชำระเงิน
+app.use('/api/inspections', require('./routes/inspections')); // 6.0 ตรวจสอบตลาด
+app.use('/api/announcements', require('./routes/announcements')); // 7.0 ประกาศ
+app.use('/api/settings', require('./routes/settings'));       // 9.1 QR PromptPay
+app.use('/api/backup', require('./routes/backup'));           // 9.2–9.3 สำรอง / กู้คืนข้อมูล
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -34,12 +37,8 @@ app.get('*', (req, res, next) => {
 app.use((err, req, res, next) => {
   // A streamed response (backup download) has already sent headers; let Express close the connection.
   if (res.headersSent) return next(err);
-  if (err && err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'ไฟล์ใหญ่เกินไป' });
-  }
-  if (err && err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'ข้อมูลใหญ่เกินไป' });
-  }
+  if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'ไฟล์ใหญ่เกินไป' });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ error: 'ข้อมูลใหญ่เกินไป' });
   console.error(err);
   res.status(500).json({ error: 'เกิดข้อผิดพลาดที่เซิร์ฟเวอร์ กรุณาลองใหม่' });
 });

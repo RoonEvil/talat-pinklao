@@ -444,17 +444,71 @@ input:focus, select:focus, textarea:focus{ outline:2px solid var(--primary); out
 .auth-toggle-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 
 /* ---------- admin ---------- */
-.admin-grid{ display:grid; grid-template-columns:210px 1fr; gap:24px; }
+.admin-grid{ display:grid; grid-template-columns:230px 1fr; gap:24px; align-items:start; }
 .admin-nav-select{ display:none; }
-.admin-nav{ display:flex; flex-direction:column; gap:2px; border-left:2px solid var(--border); padding-left:6px; }
-.admin-nav button{
-  text-align:left; background:transparent; border:none; padding:8px 12px; border-radius:6px; cursor:pointer;
-  color:var(--muted); font-weight:600; font-size:.88rem; position:relative;
+/* The menu is a solid panel so it reads as navigation, not as body text. */
+.admin-nav{
+  display:flex; flex-direction:column; gap:4px; padding:10px; border-radius:14px;
+  background:var(--primary); position:sticky; top:12px;
+  box-shadow:0 10px 24px -14px rgba(31,35,51,.55);
 }
-.admin-nav button:hover{ color:var(--ink); background:var(--surface-2); }
-.admin-nav button.active{ color:var(--primary); background:var(--primary-soft); }
-.admin-nav button.active::before{ content:""; position:absolute; left:-10px; top:6px; bottom:6px; width:3px; border-radius:2px; background:var(--accent); }
+.admin-nav button{
+  display:flex; align-items:center; gap:10px; text-align:left; background:transparent; border:none;
+  padding:10px 12px; border-radius:9px; cursor:pointer; position:relative;
+  color:color-mix(in srgb, var(--primary-ink) 78%, transparent); font-weight:600; font-size:.92rem; font-family:'Bai Jamjuree', inherit;
+}
+.admin-nav .nav-ico{ width:30px; height:30px; display:grid; place-items:center; border-radius:8px; font-size:1rem;
+  background:color-mix(in srgb, var(--primary-ink) 14%, transparent); flex:0 0 auto; }
+.admin-nav .nav-label{ flex:1 1 auto; }
+.admin-nav .nav-count{ min-width:22px; padding:1px 7px; border-radius:999px; background:var(--accent); color:var(--accent-ink);
+  font-size:.74rem; font-weight:700; text-align:center; font-family:'IBM Plex Mono', monospace; }
+.admin-nav button:hover{ color:var(--primary-ink); background:color-mix(in srgb, var(--primary-ink) 10%, transparent); }
+.admin-nav button.active{ color:var(--primary); background:var(--surface); box-shadow:0 2px 8px -3px rgba(0,0,0,.35); }
+.admin-nav button.active .nav-ico{ background:var(--accent-soft); }
+.admin-nav button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.admin-main{ min-width:0; display:flex; flex-direction:column; gap:14px; }
+.admin-title{ font-family:'Bai Jamjuree',sans-serif; font-size:1.25rem; font-weight:700; color:var(--ink); }
 .admin-panel{ display:flex; flex-direction:column; gap:22px; min-width:0; }
+.sub-tabs{ display:flex; gap:4px; flex-wrap:wrap; border-bottom:2px solid var(--border); }
+.sub-tab{ border:none; background:transparent; padding:9px 16px; font-weight:600; font-size:.9rem; color:var(--muted);
+  cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px; font-family:inherit; border-radius:8px 8px 0 0; }
+.sub-tab:hover{ color:var(--ink); background:var(--surface-2); }
+.sub-tab.active{ color:var(--primary); border-bottom-color:var(--accent); background:var(--surface); }
+.sub-tab:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.toolbar-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+.toolbar-row > .btn.primary{ margin-left:auto; }
+.admin-search{ flex:1 1 240px; max-width:360px; }
+tr.sub-row td{ background:color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.booking-card{ border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); padding:2px 0 10px; }
+.booking-card .booking-row{ border:none; }
+.vendor-history{ margin:0 14px; font-size:.84rem; }
+.vendor-history summary{ cursor:pointer; color:var(--primary); font-weight:600; }
+.vendor-history ul{ margin:6px 0 0; padding-left:18px; display:flex; flex-direction:column; gap:4px; }
+/* Booking progress 1-2-3-4 */
+.timeline{ list-style:none; display:flex; margin:4px 14px 0; padding:0; counter-reset:none; }
+.tl-step{ flex:1 1 0; display:flex; flex-direction:column; align-items:center; text-align:center; position:relative; font-size:.78rem; color:var(--muted); }
+.tl-step::before{ content:""; position:absolute; top:13px; left:-50%; width:100%; height:3px; background:var(--border); z-index:0; }
+.tl-step:first-child::before{ display:none; }
+.tl-dot{ width:28px; height:28px; border-radius:50%; display:grid; place-items:center; font-weight:700; position:relative; z-index:1;
+  background:var(--surface-2); border:2px solid var(--border); color:var(--muted); font-family:'IBM Plex Mono', monospace; }
+.tl-label{ margin-top:4px; font-weight:600; }
+.tl-time{ font-size:.72rem; }
+.tl-step.done{ color:var(--ink); }
+.tl-step.done .tl-dot{ background:var(--success); border-color:var(--success); color:#fff; }
+.tl-step.done::before{ background:var(--success); }
+.tl-step.next .tl-dot{ border-color:var(--accent); color:var(--accent); }
+.tl-step.stop .tl-dot{ background:var(--danger); border-color:var(--danger); color:#fff; }
+.timeline.is-stopped .tl-step:not(.done):not(.stop){ opacity:.45; }
+.pdpa-box{ border:1px solid var(--border); background:var(--surface-2); border-radius:var(--radius); padding:10px 12px; margin:6px 0 4px; font-size:.82rem; }
+.pdpa-box p{ margin:0 0 8px; color:var(--muted); }
+.checkline.consent{ font-size:.84rem; margin:6px 0; }
+.color-chip{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; cursor:pointer; font-size:.84rem; }
+.color-chip input{ width:auto; margin:0; accent-color:var(--zc); }
+.color-chip span{ width:16px; height:16px; border-radius:4px; background:var(--zc); }
+.color-chip:has(input:checked){ border-color:var(--zc); font-weight:700; box-shadow:0 0 0 2px color-mix(in srgb, var(--zc) 35%, transparent); }
+.role-card .check-grid{ margin:8px 0; }
+.pf-pass{ margin:4px 0 8px; font-size:.86rem; }
+.pf-pass summary{ cursor:pointer; color:var(--primary); font-weight:600; margin-bottom:6px; }
 table{ width:100%; border-collapse:collapse; font-size:.86rem; }
 th, td{ text-align:left; padding:9px 8px; border-bottom:1px solid var(--border); }
 th{ color:var(--muted); font-weight:700; font-size:.76rem; background:var(--surface-2); }
@@ -551,6 +605,11 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px dashed var(--border); 
   .admin-grid{ grid-template-columns:1fr; }
   .admin-nav-select{ display:block; margin-bottom:4px; }
   .admin-nav{ display:none; }
+  .sub-tabs{ flex-wrap:nowrap; overflow-x:auto; }
+  .sub-tab{ white-space:nowrap; padding:8px 12px; }
+  .toolbar-row > .btn.primary{ margin-left:0; }
+  .admin-search{ max-width:none; }
+  .timeline .tl-time{ display:none; }
   .field-row{ grid-template-columns:1fr; }
   .topbar{ position:static; padding-block:14px 10px; }
   .brand-logo{ width:36px; height:36px; }
@@ -569,7 +628,7 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px dashed var(--border); 
     --primary:#2e3a8c; --primary-soft:#e8eaf7; --series-guest:#c77a1c; --series-regular:#4a57b8;
   }
   body{ background:#fff; color:#000; padding:0; }
-  .topbar, footer, .admin-nav, .admin-nav-select, .no-print, .toast-wrap, .mc-title, #view-admin > .section-head{ display:none !important; }
+  .topbar, footer, .admin-nav, .admin-nav-select, .sub-tabs, .admin-title, .no-print, .toast-wrap, .mc-title, #view-admin > .section-head{ display:none !important; }
   .admin-grid{ display:block; }
   .card, .kpi{ box-shadow:none; break-inside:avoid; }
   .dash-hit{ display:none; }

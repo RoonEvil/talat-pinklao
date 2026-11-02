@@ -1,29 +1,32 @@
+// 9.2 สำรองข้อมูล / 9.3 กู้คืนข้อมูล: every table (D1–D12) in one JSON file.
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const wrap = require('../wrap');
 const { ALLOWED_TYPES } = require('../files');
-const { JWT_SECRET, requireHeadAdmin } = require('../middleware/auth');
+const { JWT_SECRET, requireMenu } = require('../middleware/auth');
 
-// The restore replaces the admins table, so the person restoring may no longer exist afterwards.
-// Step 1 hands back a short-lived token that is only accepted by the image-upload step.
-function headAdminOrRestoreToken(req, res, next) {
+const requireSettings = requireMenu('settings');
+
+// The restore replaces the users table, so the person restoring may no longer exist afterwards.
+// Step 1 hands back a short-lived token that is only accepted by the image step.
+function settingsOrRestoreToken(req, res, next) {
   const header = req.headers.authorization || '';
   try {
     if (jwt.verify(header.slice(7), JWT_SECRET).kind === 'restore') return next();
   } catch (e) { /* not a restore token; fall through to the normal check */ }
-  return requireHeadAdmin(req, res, next);
+  return requireSettings(req, res, next);
 }
 
 const router = express.Router();
-// Large bodies are parsed only after the head-admin check, so anonymous requests can't make the server buffer 25 MB.
+// Large bodies are parsed only after the permission check, so anonymous requests can't make the server buffer 25 MB.
 const bigJson = express.json({ limit: '25mb' });
 
 const FORMAT = 'talat-pinklao-backup';
-const FILE_ID = /^[0-9a-f-]{36}$/;
+const VERSION = 2;
 
 // Streamed so a database full of images never has to fit in the server's memory at once.
-router.get('/', requireHeadAdmin, wrap(async (req, res) => {
+router.get('/', requireSettings, wrap(async (req, res) => {
   const includeImages = req.query.images !== '0';
   const stamp = new Date().toISOString().slice(0, 10);
   res.set({
@@ -31,64 +34,64 @@ router.get('/', requireHeadAdmin, wrap(async (req, res) => {
     'Content-Disposition': `attachment; filename="talat-pinklao-backup-${stamp}${includeImages ? '' : '-no-images'}.json"`,
     'Cache-Control': 'no-store'
   });
-  res.write(`{"format":"${FORMAT}","version":1,"createdAt":${JSON.stringify(new Date().toISOString())},"includesImages":${includeImages},"tables":{`);
+  res.write(`{"format":"${FORMAT}","version":${VERSION},"createdAt":${JSON.stringify(new Date().toISOString())},"includesImages":${includeImages},"tables":{`);
   for (let t = 0; t < db.TABLES.length; t++) {
     const table = db.TABLES[t];
     const rows = await db.all(`SELECT ${table.cols.join(', ')} FROM ${table.name} ORDER BY ${table.cols[0]}`);
     res.write(`${t ? ',' : ''}${JSON.stringify(table.name)}:${JSON.stringify(rows)}`);
   }
-  res.write('},"files":[');
+  res.write('},"images":[');
   if (includeImages) {
-    const ids = await db.all('SELECT id FROM files ORDER BY created_at, id');
+    const ids = await db.all('SELECT picture_id FROM pictures ORDER BY picture_id');
     for (let i = 0; i < ids.length; i++) {
-      const f = await db.get('SELECT id, mime, data, created_at FROM files WHERE id = ?', [ids[i].id]);
+      const f = await db.get('SELECT picture_id, data FROM pictures WHERE picture_id = ?', [ids[i].picture_id]);
       if (!f) continue;
-      const entry = { id: f.id, mime: f.mime, created_at: f.created_at, data: Buffer.from(f.data).toString('base64') };
-      res.write(`${i ? ',' : ''}${JSON.stringify(entry)}`);
+      res.write(`${i ? ',' : ''}${JSON.stringify({ id: f.picture_id, data: Buffer.from(f.data).toString('base64') })}`);
     }
   }
   res.end(']}');
 }));
 
 function validateBackup(body) {
-  if (!body || body.format !== FORMAT || body.version !== 1 || typeof body.tables !== 'object' || !body.tables) {
-    return 'ไม่ใช่ไฟล์สำรองข้อมูลของระบบนี้';
-  }
+  if (!body || body.format !== FORMAT || typeof body.tables !== 'object' || !body.tables) return 'ไม่ใช่ไฟล์สำรองข้อมูลของระบบนี้';
+  if (body.version !== VERSION) return 'ไฟล์สำรองข้อมูลนี้มาจากระบบรุ่นเก่า (ก่อนปรับฐานข้อมูลเป็นตาราง users และ roles) จึงกู้คืนในรุ่นนี้ไม่ได้';
   for (const table of db.TABLES) {
     if (!Array.isArray(body.tables[table.name])) return `ไฟล์สำรองข้อมูลไม่มีตาราง ${table.name}`;
   }
-  const hasHeadAdmin = body.tables.admins.some((a) => a && a.role === 'head' && Number(a.active) === 1);
-  if (!hasHeadAdmin) return 'ไฟล์สำรองข้อมูลไม่มีบัญชีแอดมินใหญ่ที่ใช้งานอยู่ — กู้คืนแล้วจะเข้าระบบไม่ได้';
+  const hasAdmin = body.tables.users.some((u) => u && Number(u.role_id) === 1 && u.active && u.username && u.password_hash);
+  if (!hasAdmin) return 'ไฟล์สำรองข้อมูลไม่มีบัญชีผู้ดูแลระบบที่ใช้งานอยู่ — กู้คืนแล้วจะเข้าระบบไม่ได้';
   return null;
 }
 
-// Step 1 of a restore: replace every table in one transaction (all or nothing). Images follow in step 2.
-router.post('/restore', requireHeadAdmin, bigJson, wrap(async (req, res) => {
+// Step 1: replace every table in one transaction (all or nothing). Image bytes follow in step 2.
+router.post('/restore', requireSettings, bigJson, wrap(async (req, res) => {
   const problem = validateBackup(req.body);
   if (problem) return res.status(400).json({ error: problem });
-
   const counts = {};
   try {
     await db.tx(async (t) => {
-      await t.run(`TRUNCATE ${db.TABLES.map((x) => x.name).join(', ')}, files RESTART IDENTITY CASCADE`);
+      await t.run(`TRUNCATE ${db.TABLES.map((x) => x.name).join(', ')} RESTART IDENTITY CASCADE`);
       for (const table of db.TABLES) {
         const rows = req.body.tables[table.name];
         counts[table.name] = rows.length;
-        const chunk = Math.max(1, Math.floor(2000 / table.cols.length));
+        const cols = table.binary ? [...table.cols, 'data'] : table.cols;
+        const chunk = Math.max(1, Math.floor(2000 / cols.length));
         for (let i = 0; i < rows.length; i += chunk) {
-          const part = rows.slice(i, i + chunk);
           const params = [];
-          const tuples = part.map((row) => {
-            table.cols.forEach((c) => params.push(row && row[c] !== undefined ? row[c] : null));
-            return `(${table.cols.map(() => '?').join(',')})`;
+          const tuples = rows.slice(i, i + chunk).map((row) => {
+            const marks = cols.map((c) => {
+              if (c === 'data') { params.push(Buffer.alloc(0)); return '?'; }
+              let v = row && row[c] !== undefined ? row[c] : null;
+              if (c === 'layout_data') { params.push(v == null ? null : JSON.stringify(v)); return '?::jsonb'; }
+              params.push(v);
+              return '?';
+            });
+            return `(${marks.join(',')})`;
           });
-          await t.run(`INSERT INTO ${table.name} (${table.cols.join(', ')}) VALUES ${tuples.join(',')}`, params);
-        }
-        if (table.serial) {
-          await t.run(`SELECT setval(pg_get_serial_sequence('${table.name}', 'id'), COALESCE(MAX(id), 0) + 1, false) FROM ${table.name}`);
+          await t.run(`INSERT INTO ${table.name} (${cols.join(', ')}) VALUES ${tuples.join(',')}`, params);
         }
       }
-      await t.run('INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+      await db.resetSequences(t);
     });
   } catch (err) {
     return res.status(400).json({ error: 'กู้คืนไม่สำเร็จ ข้อมูลเดิมยังอยู่ครบ: ' + err.message });
@@ -97,19 +100,18 @@ router.post('/restore', requireHeadAdmin, bigJson, wrap(async (req, res) => {
   res.json({ ok: true, counts, restoreToken });
 }));
 
-// Step 2 of a restore: images in small batches, safe to retry.
-router.post('/restore-files', headAdminOrRestoreToken, bigJson, wrap(async (req, res) => {
-  const files = req.body && req.body.files;
-  if (!Array.isArray(files)) return res.status(400).json({ error: 'ข้อมูลรูปภาพไม่ถูกต้อง' });
+// Step 2: image bytes in small batches, safe to retry. Only pictures created in step 1 are filled.
+router.post('/restore-files', settingsOrRestoreToken, bigJson, wrap(async (req, res) => {
+  const images = req.body && req.body.images;
+  if (!Array.isArray(images)) return res.status(400).json({ error: 'ข้อมูลรูปภาพไม่ถูกต้อง' });
   let saved = 0;
-  for (const f of files) {
-    if (!f || !FILE_ID.test(f.id) || !ALLOWED_TYPES.has(f.mime) || typeof f.data !== 'string') continue;
+  for (const f of images) {
+    if (!f || !wrap.isId(f.id) || typeof f.data !== 'string') continue;
     const buf = Buffer.from(f.data, 'base64');
     if (!buf.length) continue;
-    await db.run(
-      'INSERT INTO files (id, mime, data, created_at) VALUES (?,?,?,COALESCE(?::timestamptz, NOW())) ON CONFLICT (id) DO NOTHING',
-      [f.id, f.mime, buf, f.created_at || null]
-    );
+    const pic = await db.get('SELECT mime_type FROM pictures WHERE picture_id = ?', [f.id]);
+    if (!pic || !ALLOWED_TYPES.has(pic.mime_type)) continue;
+    await db.run('UPDATE pictures SET data = ? WHERE picture_id = ?', [buf, f.id]);
     saved++;
   }
   res.json({ ok: true, saved });

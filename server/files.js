@@ -1,11 +1,12 @@
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('./db');
+const { JWT_SECRET } = require('./middleware/auth');
 
 // SVG is excluded: it can carry scripts that would run on our origin.
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
-// Images live in Postgres so they survive redeploys; ids are random so URLs can't be enumerated.
+// Images live in Postgres (D12 pictures) so they survive redeploys.
 function imageUpload(field, maxBytes) {
   return multer({
     storage: multer.memoryStorage(),
@@ -14,20 +15,33 @@ function imageUpload(field, maxBytes) {
   }).single(field);
 }
 
-async function saveImage(file) {
-  const id = crypto.randomUUID();
-  await db.run('INSERT INTO files (id, mime, data) VALUES (?,?,?)', [id, file.mimetype, file.buffer]);
-  return `/files/${id}`;
+async function savePicture(t, file, type, uploadedBy) {
+  const row = await t.get(
+    'INSERT INTO pictures (picture_type, mime_type, data, uploaded_by) VALUES (?,?,?,?) RETURNING picture_id',
+    [type, file.mimetype, file.buffer, uploadedBy || null]);
+  return row.picture_id;
+}
+
+// picture_id is a running number, so links carry a signature: a slip can't be opened by guessing ids.
+function sign(id) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`picture:${id}`).digest('hex').slice(0, 24);
+}
+function pictureUrl(id) {
+  return id ? `/files/${id}?k=${sign(id)}` : null;
 }
 
 async function serveFile(req, res) {
-  if (!/^[0-9a-f-]{36}$/.test(req.params.id)) return res.status(404).end();
-  const row = await db.get('SELECT mime, data FROM files WHERE id = ?', [req.params.id]);
-  if (!row) return res.status(404).end();
-  res.set('Content-Type', row.mime);
+  const id = req.params.id;
+  if (!/^\d{1,9}$/.test(id)) return res.status(404).end();
+  const k = String(req.query.k || '');
+  const expected = sign(id);
+  if (k.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(k), Buffer.from(expected))) return res.status(404).end();
+  const row = await db.get('SELECT mime_type, data FROM pictures WHERE picture_id = ?', [id]);
+  if (!row || !row.data || !row.data.length) return res.status(404).end();
+  res.set('Content-Type', row.mime_type);
   res.set('Cache-Control', 'private, max-age=86400');
   res.set('X-Content-Type-Options', 'nosniff');
   res.send(Buffer.from(row.data));
 }
 
-module.exports = { imageUpload, saveImage, serveFile, ALLOWED_TYPES };
+module.exports = { imageUpload, savePicture, pictureUrl, serveFile, ALLOWED_TYPES };
