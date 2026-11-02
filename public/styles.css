@@ -641,3 +641,15 @@ footer{ margin-top:40px; padding-top:16px; border-top:1px dashed var(--border); 
 .autofill-note{ margin:0 0 12px; padding:8px 12px; border-radius:8px; background:var(--primary-soft); color:var(--ink); font-size:.86rem; line-height:1.5; }
 .link-btn{ border:none; background:none; padding:0 0 0 6px; color:var(--primary); font:inherit; font-weight:600; text-decoration:underline; cursor:pointer; }
 .link-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+
+/* required fields and Thai inline validation */
+.req{ color:var(--danger); font-weight:700; }
+.field-error{ color:var(--danger); font-size:.8rem; margin-top:4px; min-height:0; }
+.field-error:empty{ display:none; }
+input.is-invalid, textarea.is-invalid, select.is-invalid{ border-color:var(--danger); box-shadow:0 0 0 2px color-mix(in srgb, var(--danger) 22%, transparent); }
+button[type=submit]:disabled{ opacity:.55; cursor:not-allowed; }
+/* read-only vendor detail */
+.detail-list{ display:grid; grid-template-columns:max-content 1fr; gap:6px 14px; margin:0; font-size:.9rem; }
+.detail-list dt{ color:var(--muted); font-weight:600; }
+.detail-list dd{ margin:0; overflow-wrap:anywhere; }
+.detail-history{ margin:6px 0 0; padding-left:18px; display:flex; flex-direction:column; gap:4px; font-size:.86rem; }

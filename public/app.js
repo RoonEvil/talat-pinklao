@@ -118,7 +118,7 @@
       return res.text().then(function(text){
         var data = {};
         try { data = text ? JSON.parse(text) : {}; } catch(e){}
-        if (!res.ok) return Promise.reject({ status: res.status, error: data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่' });
+        if (!res.ok) return Promise.reject({ status: res.status, error: data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่', fields: data.fields, code: data.code });
         return data;
       });
     });
@@ -350,6 +350,7 @@
       applySessionUser(u);
       if (profile.isAdmin && !wasStaff) state.activeTab = 'admin';
       render();
+      requireCompleteProfile();
     }).catch(function(err){
       if (err && (err.status === 401 || err.status === 403)){
         signOutCompletely();
@@ -402,7 +403,7 @@
       return;
     }
     document.getElementById('logoutBtn').onclick = logout;
-    document.getElementById('profileBtn').onclick = openProfileModal;
+    document.getElementById('profileBtn').onclick = function(){ openProfileModal(false); };
   }
 
   function renderTabs(){
@@ -1016,6 +1017,7 @@
     if (e.key !== 'Escape') return;
     var title = document.querySelector('.mc-title');
     if (title) title.close();
+    else if (document.getElementById('pfLogout')) return; // profile must be completed first
     else if (document.getElementById('modalRoot').innerHTML) closeModal();
   });
 
@@ -1055,6 +1057,70 @@
         openImageModal(img.dataset.full, img.dataset.title || 'สลิปการชำระเงิน');
       });
     });
+  }
+
+  // ---------- form validation in Thai (replaces the browser's English "Please fill out this field.") ----------
+  var REQ = ' <span class="req" aria-hidden="true">*</span>';
+  var PHONE_RE = /^0\d{9}$/;
+  var MIN_PASSWORD = 8;
+  var V = {
+    required: function(label){ return function(v){ return v ? '' : 'กรุณากรอก' + label; }; },
+    phone: function(v){ v = v.replace(/[\s-]/g, ''); return !v ? 'กรุณากรอกเบอร์โทรศัพท์' : PHONE_RE.test(v) ? '' : 'เบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก ขึ้นต้นด้วย 0'; },
+    username: function(v){ return !v ? 'กรุณากรอกชื่อผู้ใช้' : /^[a-z0-9_-]+$/i.test(v) ? '' : 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 _ -'; },
+    password: function(optional){
+      return function(v){ if (!v) return optional ? '' : 'กรุณาตั้งรหัสผ่าน'; return v.length >= MIN_PASSWORD ? '' : 'รหัสผ่านต้องมีอย่างน้อย ' + MIN_PASSWORD + ' ตัวอักษร'; };
+    }
+  };
+  // rules: [{ id, check(value) -> '' | message }]. Errors show under each field once it was touched or on submit;
+  // the submit button stays disabled until every rule passes. Returns { valid(), showAll(), setServerErrors(fields, msg) }.
+  function bindValidation(form, rules, submitBtn, extraValid){
+    form.setAttribute('novalidate', '');
+    var touched = {};
+    var errEl = function(id){
+      var el = document.getElementById(id + 'Err');
+      if (!el){
+        el = document.createElement('div');
+        el.className = 'field-error'; el.id = id + 'Err'; el.setAttribute('role', 'alert');
+        var input = document.getElementById(id);
+        (input.closest('.field') || input.parentNode).appendChild(el);
+      }
+      return el;
+    };
+    var messageOf = function(r){ var el = document.getElementById(r.id); return el ? r.check(el.value.trim()) : ''; };
+    var refresh = function(showAll){
+      var ok = true;
+      rules.forEach(function(r){
+        var msg = messageOf(r);
+        if (msg) ok = false;
+        var input = document.getElementById(r.id);
+        if (!input) return;
+        var show = showAll || touched[r.id];
+        errEl(r.id).textContent = show ? msg : '';
+        input.classList.toggle('is-invalid', !!(show && msg));
+        input.setAttribute('aria-invalid', show && msg ? 'true' : 'false');
+      });
+      if (extraValid && !extraValid()) ok = false;
+      if (submitBtn) submitBtn.disabled = !ok;
+      return ok;
+    };
+    rules.forEach(function(r){
+      var input = document.getElementById(r.id);
+      if (!input) return;
+      input.addEventListener('input', function(){ refresh(false); });
+      input.addEventListener('blur', function(){ touched[r.id] = true; refresh(false); });
+    });
+    form.addEventListener('change', function(){ refresh(false); });
+    refresh(false);
+    return {
+      valid: function(){ return refresh(true); },
+      refresh: function(){ return refresh(false); },
+      setServerErrors: function(fields){
+        (fields || []).forEach(function(f){
+          var r = rules.find(function(x){ return x.field === f; });
+          if (r){ touched[r.id] = true; var el = document.getElementById(r.id); if (el) el.classList.add('is-invalid'); errEl(r.id).textContent = errEl(r.id).textContent || 'กรุณาตรวจสอบช่องนี้'; }
+        });
+      }
+    };
   }
 
   // Radio chips for one goods category, plus its kinds when it has them (registration and the user form).
@@ -1102,21 +1168,22 @@
     var guessName = (profile.vendorName || '').split(/\s+/);
     var registerFields =
       '<div class="field-row">' +
-        '<div class="field"><label for="afFirst">ชื่อ</label><input id="afFirst" autocomplete="given-name" required value="'+esc(guessName[0]||'')+'"></div>' +
-        '<div class="field"><label for="afLast">นามสกุล</label><input id="afLast" autocomplete="family-name" required value="'+esc(guessName.slice(1).join(' '))+'"></div>' +
+        '<div class="field"><label for="afFirst">ชื่อ'+REQ+'</label><input id="afFirst" autocomplete="given-name" value="'+esc(guessName[0]||'')+'"></div>' +
+        '<div class="field"><label for="afLast">นามสกุล'+REQ+'</label><input id="afLast" autocomplete="family-name" value="'+esc(guessName.slice(1).join(' '))+'"></div>' +
       '</div>' +
       '<div class="field-row">' +
-        '<div class="field"><label for="afPhone">เบอร์โทรศัพท์</label><input id="afPhone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="08XXXXXXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
+        '<div class="field"><label for="afPhone">เบอร์โทรศัพท์'+REQ+'</label><input id="afPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="12" placeholder="08XXXXXXXX" value="'+esc(profile.vendorPhone)+'"></div>' +
         '<div class="field"><label for="afLine">Line ID <span class="muted">(ถ้ามี)</span></label><input id="afLine"></div>' +
       '</div>' +
-      '<div class="field"><label for="afAddr">ที่อยู่</label><textarea id="afAddr" rows="2" autocomplete="street-address"></textarea></div>' +
+      '<div class="field"><label for="afAddr">ที่อยู่'+REQ+'</label><textarea id="afAddr" rows="2" autocomplete="street-address"></textarea></div>' +
       goodsPickerHtml('af', null, null) +
       '<div class="field-row">' +
-        '<div class="field"><label for="afUser">ชื่อผู้ใช้ <span class="muted">(a-z 0-9)</span></label><input id="afUser" autocomplete="username" required></div>' +
-        '<div class="field"><label for="afPass">รหัสผ่าน</label><input id="afPass" type="password" autocomplete="new-password" required></div>' +
+        '<div class="field"><label for="afUser">ชื่อผู้ใช้'+REQ+' <span class="muted">(a-z 0-9)</span></label><input id="afUser" autocomplete="username"></div>' +
+        '<div class="field"><label for="afPass">รหัสผ่าน'+REQ+' <span class="muted">(อย่างน้อย '+MIN_PASSWORD+' ตัว)</span></label><input id="afPass" type="password" autocomplete="new-password"></div>' +
       '</div>' +
       '<div class="pdpa-box"><p>'+esc(PDPA_NOTICE)+'</p>' +
-        '<label class="checkline"><input type="checkbox" id="afConsent"> ยินยอมให้เก็บและใช้ข้อมูลส่วนบุคคลตามที่แจ้งไว้ข้างต้น</label></div>';
+        '<label class="checkline"><input type="checkbox" id="afConsent"> ยินยอมให้เก็บและใช้ข้อมูลส่วนบุคคลตามที่แจ้งไว้ข้างต้น'+REQ+'</label></div>' +
+      '<p class="muted small"><span class="req">*</span> ช่องที่ต้องกรอก</p>';
 
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
@@ -1142,7 +1209,28 @@
     document.getElementById('authToggle').querySelectorAll('.auth-toggle-btn').forEach(function(btn){
       btn.addEventListener('click', function(){ openAuthModal(btn.dataset.authmode); });
     });
-    if (mode === 'register') bindGoodsPicker(root, 'af');
+    var authSubmit = root.querySelector('#authForm button[type=submit]');
+    var check = null;
+    if (mode === 'register'){
+      bindGoodsPicker(root, 'af');
+      // All profile fields, a category (and kind) and PDPA consent are required before the button is enabled.
+      check = bindValidation(document.getElementById('authForm'), [
+        { id:'afFirst', field:'firstName', check: V.required('ชื่อ') },
+        { id:'afLast', field:'lastName', check: V.required('นามสกุล') },
+        { id:'afPhone', field:'phone', check: V.phone },
+        { id:'afAddr', field:'address', check: V.required('ที่อยู่') },
+        { id:'afUser', field:'username', check: V.username },
+        { id:'afPass', field:'password', check: V.password(false) }
+      ], authSubmit, function(){
+        var g = readGoodsPicker(root, 'af');
+        return !!(g.category && (!hasKinds(g.category) || g.foodType) && document.getElementById('afConsent').checked);
+      });
+    } else {
+      check = bindValidation(document.getElementById('authForm'), [
+        { id:'afUser', field:'username', check: V.required('ชื่อผู้ใช้') },
+        { id:'afPass', field:'password', check: V.required('รหัสผ่าน') }
+      ], authSubmit);
+    }
 
     var signedIn = function(res, welcome){
       saveToken(res.token);
@@ -1152,6 +1240,7 @@
       if (res.claimedBookings) toast('ย้ายการจองที่ส่งจากเครื่องนี้ ' + res.claimedBookings + ' รายการ เข้าบัญชีแล้ว');
       if (profile.isAdmin){ state.adminMenu = firstMenu(); setTab('admin'); }
       else setTab('mine');
+      requireCompleteProfile();
     };
 
     document.getElementById('authForm').addEventListener('submit', function(e){
@@ -1173,18 +1262,18 @@
         };
         var goods = readGoodsPicker(root, 'af');
         body.category = goods.category; body.foodType = goods.foodType;
-        if (!body.firstName || !body.lastName || !body.phone || !username || !password){ errEl.textContent = 'กรุณากรอกชื่อ นามสกุล เบอร์โทรศัพท์ ชื่อผู้ใช้ และรหัสผ่านให้ครบ'; return; }
+        if (!check.valid()){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
         if (!goods.category){ errEl.textContent = 'กรุณาเลือกประเภทสินค้าที่จะขาย 1 ประเภท'; return; }
         if (hasKinds(goods.category) && !goods.foodType){ errEl.textContent = 'กรุณาเลือกชนิดของ' + categoryMeta(goods.category).label; return; }
         if (!body.consent){ errEl.textContent = 'กรุณาติ๊กยินยอมให้เก็บข้อมูลส่วนบุคคลก่อนสมัครสมาชิก'; return; }
         submitBtn.disabled = true;
         apiPost('/api/auth/register', body)
           .then(function(res){ signedIn(res, 'สร้างบัญชีสำเร็จ — ยินดีต้อนรับ '); })
-          .catch(function(err){ errEl.textContent = err.error || 'สร้างบัญชีไม่สำเร็จ'; submitBtn.disabled = false; });
+          .catch(function(err){ errEl.textContent = err.error || 'สร้างบัญชีไม่สำเร็จ'; check.setServerErrors(err.fields); submitBtn.disabled = false; });
         return;
       }
 
-      if (!username || !password){ errEl.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'; return; }
+      if (!check.valid()){ errEl.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'; return; }
       submitBtn.disabled = true;
       apiPost('/api/auth/login', { username:username, password:password })
         .then(function(res){ signedIn(res, 'เข้าสู่ระบบในชื่อ '); })
@@ -1192,43 +1281,63 @@
     });
   }
 
-  // 1.3 ผู้ใช้แก้ไขข้อมูลส่วนตัวของตนเอง
-  function openProfileModal(){
+  // 1.3 ผู้ใช้แก้ไขข้อมูลส่วนตัวของตนเอง. Required fields cannot be cleared. With `mustComplete`, an older account
+  // that lacks a required field has to fill it in before using the system (no cancel).
+  var PROFILE_FIELD_LABELS = { firstName:'ชื่อ', lastName:'นามสกุล', phone:'เบอร์โทรศัพท์', address:'ที่อยู่' };
+  function openProfileModal(mustComplete){
+    mustComplete = mustComplete === true;
     var u = profile.user || {};
+    var missing = (u.missingFields || []).map(function(k){ return PROFILE_FIELD_LABELS[k] || k; });
     var root = document.getElementById('modalRoot');
     root.innerHTML =
       '<div class="modal-back" id="mb"><div class="modal">' +
-      '<h3>ข้อมูลส่วนตัว</h3>' +
+      '<h3>'+(mustComplete ? 'กรุณากรอกข้อมูลให้ครบก่อนใช้งาน' : 'ข้อมูลส่วนตัว')+'</h3>' +
       '<div class="sub">'+esc(ROLE_LABELS[u.roleId]||'')+(u.username ? ' · ชื่อผู้ใช้ '+esc(u.username) : '')+
         (u.roleId === ROLE.VENDOR && u.category ? ' · ขาย'+esc(goodsLabel(u.category, u.foodType)) : '')+'</div>' +
+      (mustComplete ? '<p class="clash-note" role="alert">บัญชีนี้ยังขาดข้อมูลที่จำเป็น: '+esc(missing.join(', '))+' ตามระเบียบใหม่ทุกบัญชีต้องมีชื่อ นามสกุล เบอร์โทรศัพท์ และที่อยู่</p>' : '') +
       '<form id="pfForm">' +
         '<div class="field-row">' +
-          '<div class="field"><label for="pfFirst">ชื่อ</label><input id="pfFirst" required value="'+esc(u.firstName||'')+'"></div>' +
-          '<div class="field"><label for="pfLast">นามสกุล</label><input id="pfLast" required value="'+esc(u.lastName||'')+'"></div>' +
+          '<div class="field"><label for="pfFirst">ชื่อ'+REQ+'</label><input id="pfFirst" value="'+esc(u.firstName||'')+'"></div>' +
+          '<div class="field"><label for="pfLast">นามสกุล'+REQ+'</label><input id="pfLast" value="'+esc(u.lastName||'')+'"></div>' +
         '</div>' +
         '<div class="field-row">' +
-          '<div class="field"><label for="pfPhone">เบอร์โทรศัพท์</label><input id="pfPhone" type="tel" required value="'+esc(u.phone||'')+'"></div>' +
-          '<div class="field"><label for="pfLine">Line ID</label><input id="pfLine" value="'+esc(u.lineId||'')+'"></div>' +
+          '<div class="field"><label for="pfPhone">เบอร์โทรศัพท์'+REQ+'</label><input id="pfPhone" type="tel" inputmode="tel" maxlength="12" value="'+esc(u.phone||'')+'"></div>' +
+          '<div class="field"><label for="pfLine">Line ID <span class="muted">(ถ้ามี)</span></label><input id="pfLine" value="'+esc(u.lineId||'')+'"></div>' +
         '</div>' +
-        '<div class="field"><label for="pfAddr">ที่อยู่</label><textarea id="pfAddr" rows="2">'+esc(u.address||'')+'</textarea></div>' +
+        '<div class="field"><label for="pfAddr">ที่อยู่'+REQ+'</label><textarea id="pfAddr" rows="2">'+esc(u.address||'')+'</textarea></div>' +
         '<details class="pf-pass"><summary>เปลี่ยนรหัสผ่าน</summary><div class="field-row">' +
           '<div class="field"><label for="pfCur">รหัสผ่านปัจจุบัน</label><input id="pfCur" type="password" autocomplete="current-password"></div>' +
-          '<div class="field"><label for="pfNew">รหัสผ่านใหม่</label><input id="pfNew" type="password" autocomplete="new-password"></div>' +
+          '<div class="field"><label for="pfNew">รหัสผ่านใหม่ <span class="muted">(อย่างน้อย '+MIN_PASSWORD+' ตัว)</span></label><input id="pfNew" type="password" autocomplete="new-password"></div>' +
         '</div></details>' +
+        '<p class="muted small"><span class="req">*</span> ช่องที่ต้องกรอก</p>' +
         '<div class="form-error" id="pfErr"></div>' +
-        '<div class="form-actions"><button type="button" class="btn ghost" id="pfCancel">ยกเลิก</button><button type="submit" class="btn primary">บันทึก</button></div>' +
+        '<div class="form-actions">' +
+          (mustComplete ? '<button type="button" class="btn ghost" id="pfLogout">ออกจากระบบ</button>' : '<button type="button" class="btn ghost" id="pfCancel">ยกเลิก</button>') +
+          '<button type="submit" class="btn primary">บันทึก</button></div>' +
       '</form></div></div>';
     var back = document.getElementById('mb');
-    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
-    document.getElementById('pfCancel').onclick = closeModal;
-    document.getElementById('pfForm').addEventListener('submit', function(e){
+    if (!mustComplete){
+      back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+      document.getElementById('pfCancel').onclick = closeModal;
+    } else {
+      document.getElementById('pfLogout').onclick = function(){ closeModal(); logout(); };
+    }
+    var form = document.getElementById('pfForm');
+    var btn = form.querySelector('button[type=submit]');
+    var check = bindValidation(form, [
+      { id:'pfFirst', field:'firstName', check: V.required('ชื่อ') },
+      { id:'pfLast', field:'lastName', check: V.required('นามสกุล') },
+      { id:'pfPhone', field:'phone', check: V.phone },
+      { id:'pfAddr', field:'address', check: V.required('ที่อยู่') },
+      { id:'pfNew', field:'newPassword', check: V.password(true) }
+    ], btn);
+    form.addEventListener('submit', function(e){
       e.preventDefault();
-      var btn = e.target.querySelector('button[type=submit]');
+      var errEl = document.getElementById('pfErr');
+      if (!check.valid()){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
       btn.disabled = true;
       apiPut('/api/auth/me', {
-        firstName: document.getElementById('pfFirst').value.trim(), lastName: document.getElementById('pfLast').value.trim(),
-        phone: document.getElementById('pfPhone').value.trim(), lineId: document.getElementById('pfLine').value.trim(),
-        address: document.getElementById('pfAddr').value.trim(),
+        firstName: fval('pfFirst'), lastName: fval('pfLast'), phone: fval('pfPhone'), lineId: fval('pfLine'), address: fval('pfAddr'),
         currentPassword: document.getElementById('pfCur').value, newPassword: document.getElementById('pfNew').value || undefined
       }).then(function(user){
         applySessionUser(user);
@@ -1236,10 +1345,15 @@
         toast('บันทึกข้อมูลส่วนตัวแล้ว');
         render();
       }).catch(function(err){
-        document.getElementById('pfErr').textContent = err.error || 'บันทึกไม่สำเร็จ';
+        errEl.textContent = err.error || 'บันทึกไม่สำเร็จ';
+        check.setServerErrors(err.fields);
         btn.disabled = false;
       });
     });
+  }
+  // Called after sign-in and on every page load.
+  function requireCompleteProfile(){
+    if ((profile.isAdmin || profile.isRegistered) && profile.user && (profile.user.missingFields || []).length) openProfileModal(true);
   }
 
   // Booking progress like a parcel tracker: 1 ส่งคำขอ → 2 อนุมัติ → 3 ชำระเงิน → 4 ยืนยันรับเงิน.
@@ -1503,6 +1617,8 @@
     { key:'settings', label:'ตั้งค่าระบบ', icon:'⚙️', tabs:[['qr','QR พร้อมเพย์'],['roles','สิทธิ์การใช้งาน'],['backup','สำรองและกู้คืนข้อมูล']] }
   ];
   function visibleMenus(){ return ADMIN_MENUS.filter(function(m){ return canMenu(m.key); }); }
+  // เจ้าหน้าที่ตลาด sees the users menu as a read-only vendor list.
+  function menuLabel(m){ return m.key === 'users' && !profile.isHeadAdmin ? 'ข้อมูลผู้ค้า' : m.label; }
   function firstMenu(){ var v = visibleMenus(); return v.length ? (v.find(function(m){ return m.key === 'bookings'; }) || v[0]).key : 'bookings'; }
   function menuTabs(key){
     var m = ADMIN_MENUS.find(function(x){ return x.key === key; });
@@ -1543,10 +1659,10 @@
     };
     var nav = menus.map(function(m){
       return '<button class="'+(menu===m.key?'active':'')+'" data-menu="'+m.key+'"><span class="nav-ico" aria-hidden="true">'+m.icon+'</span>' +
-        '<span class="nav-label">'+m.label+'</span>'+(counts[m.key] ? '<span class="nav-count">'+counts[m.key]+'</span>' : '')+'</button>';
+        '<span class="nav-label">'+menuLabel(m)+'</span>'+(counts[m.key] ? '<span class="nav-count">'+counts[m.key]+'</span>' : '')+'</button>';
     }).join('');
     var navOptions = menus.map(function(m){
-      return '<option value="'+m.key+'" '+(menu===m.key?'selected':'')+'>'+m.icon+' '+m.label+(counts[m.key] ? ' ('+counts[m.key]+')' : '')+'</option>';
+      return '<option value="'+m.key+'" '+(menu===m.key?'selected':'')+'>'+m.icon+' '+menuLabel(m)+(counts[m.key] ? ' ('+counts[m.key]+')' : '')+'</option>';
     }).join('');
     var tabs = menuTabs(menu);
     var tab = adminTab(menu);
@@ -1561,7 +1677,7 @@
         '<select class="admin-nav-select" id="adminNavSelect" aria-label="เมนูระบบจัดการข้อมูล">'+navOptions+'</select>' +
         '<nav class="admin-nav" aria-label="เมนูระบบจัดการข้อมูล">'+nav+'</nav>' +
         '<div class="admin-main">' +
-          '<div class="admin-title"><span aria-hidden="true">'+current.icon+'</span> '+current.label+'</div>' +
+          '<div class="admin-title"><span aria-hidden="true">'+current.icon+'</span> '+menuLabel(current)+'</div>' +
           tabBar +
           '<div class="admin-panel" id="adminPanel"></div>' +
         '</div>' +
@@ -1881,7 +1997,8 @@
 
     var rowsHtml = list.length ? list.map(function(b){
       var payStatus = b.payment_status || 'unpaid';
-      var open = (b.status === 'pending' || b.status === 'approved') && b.end_date >= todayStr();
+      // A booking that is already paid is cancelled only by ผู้ดูแลระบบ (the server enforces this too).
+      var open = (b.status === 'pending' || b.status === 'approved') && b.end_date >= todayStr() && (profile.isHeadAdmin || payStatus === 'unpaid');
       return '<tr><td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone)+'</span>' +
           (b.created_by_name ? '<br><span class="pill small">จองแทนโดย '+esc(b.created_by_name)+'</span>' : '') + '</td>' +
         '<td class="mono">'+categoryMeta(b.category).icon+' '+esc(b.stall_code||'—')+'<br><span class="muted small">'+esc(b.goods_label || goodsLabel(b.category, b.food_type))+'</span></td>' +
@@ -2511,37 +2628,41 @@
     });
   }
 
-  // ---------- 1.3 จัดการข้อมูลผู้ใช้ (one table for all roles, a tab per role) ----------
+  // ---------- 1.3 จัดการข้อมูลผู้ใช้ ----------
+  // ผู้ดูแลระบบ: one table for all roles, a tab per role, add / edit / suspend / delete.
+  // เจ้าหน้าที่ตลาด: "ข้อมูลผู้ค้า" — vendors only, search and a read-only detail view (least privilege, PDPA).
   var USER_TABS = { admin: ROLE.ADMIN, staff: ROLE.STAFF, vendor: ROLE.VENDOR };
   function openUserModal(userId, roleId){
-    var u = userId ? (state.users.concat(state.vendors)).find(function(x){ return String(x.id) === String(userId); }) : null;
+    if (!profile.isHeadAdmin) return;
+    var u = userId ? state.users.find(function(x){ return String(x.id) === String(userId); }) : null;
     roleId = u ? u.roleId : roleId;
     var isVendor = roleId === ROLE.VENDOR;
-    var roleSelect = profile.isHeadAdmin
-      ? '<div class="field"><label for="uRole">สิทธิ์</label><select id="uRole">' + [1,2,3].map(function(r){
-          return '<option value="'+r+'"'+(r===roleId?' selected':'')+'>'+ROLE_LABELS[r]+'</option>';
-        }).join('') + '</select></div>'
-      : '<input type="hidden" id="uRole" value="3">';
+    var roleSelect = '<div class="field"><label for="uRole">สิทธิ์'+REQ+'</label><select id="uRole">' + [1,2,3].map(function(r){
+      return '<option value="'+r+'"'+(r===roleId?' selected':'')+'>'+ROLE_LABELS[r]+'</option>';
+    }).join('') + '</select></div>';
+    var needsPassword = !(u && u.hasLogin);
     var form = openFormModal(u ? 'แก้ไขข้อมูล ' + u.name : 'เพิ่ม' + ROLE_LABELS[roleId], u && u.consentAt ? 'ยินยอม PDPA เมื่อ ' + fmtDateTime(u.consentAt) : '',
       '<div class="field-row">' +
-        '<div class="field"><label for="uFirst">ชื่อ</label><input id="uFirst" required value="'+esc(u ? u.firstName : '')+'"></div>' +
-        '<div class="field"><label for="uLast">นามสกุล</label><input id="uLast" required value="'+esc(u ? u.lastName : '')+'"></div>' +
+        '<div class="field"><label for="uFirst">ชื่อ'+REQ+'</label><input id="uFirst" value="'+esc(u ? u.firstName : '')+'"></div>' +
+        '<div class="field"><label for="uLast">นามสกุล'+REQ+'</label><input id="uLast" value="'+esc(u ? u.lastName : '')+'"></div>' +
       '</div>' +
       '<div class="field-row">' +
-        '<div class="field"><label for="uPhone">เบอร์โทรศัพท์</label><input id="uPhone" type="tel" required value="'+esc(u ? u.phone : '')+'" placeholder="08XXXXXXXX"></div>' +
-        '<div class="field"><label for="uLine">Line ID</label><input id="uLine" value="'+esc(u ? u.lineId : '')+'"></div>' +
+        '<div class="field"><label for="uPhone">เบอร์โทรศัพท์'+REQ+'</label><input id="uPhone" type="tel" inputmode="tel" maxlength="12" value="'+esc(u ? u.phone : '')+'" placeholder="08XXXXXXXX"></div>' +
+        '<div class="field"><label for="uLine">Line ID <span class="muted">(ถ้ามี)</span></label><input id="uLine" value="'+esc(u ? u.lineId : '')+'"></div>' +
       '</div>' +
-      '<div class="field"><label for="uAddr">ที่อยู่</label><textarea id="uAddr" rows="2">'+esc(u ? u.address : '')+'</textarea></div>' +
+      '<div class="field"><label for="uAddr">ที่อยู่'+REQ+'</label><textarea id="uAddr" rows="2">'+esc(u ? u.address : '')+'</textarea></div>' +
       '<div class="field-row">' +
-        '<div class="field"><label for="uUser">ชื่อผู้ใช้'+(isVendor?' <span class="muted">(เว้นว่างได้)</span>':'')+'</label><input id="uUser" value="'+esc(u && u.username ? u.username : '')+'"></div>' +
-        '<div class="field"><label for="uPass">รหัสผ่าน'+(u && u.hasLogin ? ' <span class="muted">(เว้นว่าง = ไม่เปลี่ยน)</span>' : '')+'</label><input id="uPass" type="password" autocomplete="new-password"></div>' +
+        '<div class="field"><label for="uUser">ชื่อผู้ใช้'+REQ+'</label><input id="uUser" autocomplete="off" value="'+esc(u && u.username ? u.username : '')+'"></div>' +
+        '<div class="field"><label for="uPass">รหัสผ่าน'+(needsPassword ? REQ : ' <span class="muted">(เว้นว่าง = ไม่เปลี่ยน)</span>')+'</label><input id="uPass" type="password" autocomplete="new-password"></div>' +
       '</div>' +
       roleSelect +
       '<div id="uVendorBox"'+(isVendor?'':' hidden')+'>' + goodsPickerHtml('u', u ? u.category : null, u ? u.foodType : null) +
         '<label class="checkline"><input type="checkbox" id="uRegular"'+(u && u.isRegular?' checked':'')+'> ผู้ค้าขาประจำ (ได้ราคาขาประจำ)</label></div>' +
       '<label class="checkline"><input type="checkbox" id="uActive"'+(!u || u.active?' checked':'')+'> เปิดใช้งานบัญชี</label>' +
-      (!u && isVendor ? '<label class="checkline"><input type="checkbox" id="uConsent"> ผู้ค้ายินยอมให้เก็บข้อมูลส่วนบุคคลแล้ว (PDPA)</label>' : ''),
-      function(f, errEl, btn, confirmDup){
+      (!u ? '<label class="checkline" id="uConsentLine"'+(isVendor?'':' hidden')+'><input type="checkbox" id="uConsent"> ผู้ค้ายินยอมให้เก็บข้อมูลส่วนบุคคลแล้ว (PDPA)'+REQ+'</label>' : '') +
+      '<p class="muted small"><span class="req">*</span> ช่องที่ต้องกรอก</p>',
+      function(f, errEl, btn){
+        if (!check.valid()){ errEl.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; return; }
         var role = Number(fval('uRole'));
         var goods = readGoodsPicker(f, 'u');
         var body = {
@@ -2553,7 +2674,6 @@
         if (document.getElementById('uPass').value) body.password = document.getElementById('uPass').value;
         var consentEl = document.getElementById('uConsent');
         if (consentEl) body.consent = consentEl.checked;
-        if (role === ROLE.VENDOR && goods.category && hasKinds(goods.category) && !goods.foodType){ errEl.textContent = 'กรุณาเลือกชนิดของ' + categoryMeta(goods.category).label; return; }
         var save = function(confirmDuplicateName){
           btn.disabled = true;
           if (confirmDuplicateName) body.confirmDuplicateName = true;
@@ -2561,11 +2681,12 @@
             .then(function(){ toast('บันทึกข้อมูลผู้ใช้แล้ว'); closeModal(); loadUsers(); })
             .catch(function(err){
               btn.disabled = false;
-              if (err && err.status === 409 && /อยู่ในระบบแล้ว/.test(err.error || '')){
+              if (err && err.code === 'DUPLICATE_NAME'){
                 errEl.innerHTML = esc(err.error) + ' <button type="button" class="btn small primary" id="uDupOk">บันทึกต่อ</button>';
                 document.getElementById('uDupOk').onclick = function(){ save(true); };
               } else {
                 errEl.textContent = (err && err.error) || 'บันทึกไม่สำเร็จ';
+                check.setServerErrors(err && err.fields);
               }
             });
         };
@@ -2573,13 +2694,61 @@
       });
     bindGoodsPicker(form, 'u');
     var roleEl = document.getElementById('uRole');
-    if (roleEl && roleEl.tagName === 'SELECT') roleEl.addEventListener('change', function(){
-      document.getElementById('uVendorBox').hidden = Number(roleEl.value) !== ROLE.VENDOR;
+    roleEl.addEventListener('change', function(){
+      var vendor = Number(roleEl.value) === ROLE.VENDOR;
+      document.getElementById('uVendorBox').hidden = !vendor;
+      var c = document.getElementById('uConsentLine'); if (c) c.hidden = !vendor;
+      check.refresh();
+    });
+    var check = bindValidation(form, [
+      { id:'uFirst', field:'firstName', check: V.required('ชื่อ') },
+      { id:'uLast', field:'lastName', check: V.required('นามสกุล') },
+      { id:'uPhone', field:'phone', check: V.phone },
+      { id:'uAddr', field:'address', check: V.required('ที่อยู่') },
+      { id:'uUser', field:'username', check: V.username },
+      { id:'uPass', field:'password', check: V.password(!needsPassword) }
+    ], form.querySelector('button[type=submit]'), function(){
+      if (Number(fval('uRole')) !== ROLE.VENDOR) return true;
+      var g = readGoodsPicker(form, 'u');
+      if (g.category && hasKinds(g.category) && !g.foodType) return false;
+      var c = document.getElementById('uConsent');
+      return !c || c.checked;
     });
   }
 
+  // Read-only vendor detail for เจ้าหน้าที่ตลาด (also used by the admin's list).
+  function openVendorDetail(userId){
+    var u = state.users.find(function(x){ return String(x.id) === String(userId); });
+    if (!u) return;
+    var history = (state.bookings || []).filter(function(b){ return b.vendor_id === u.id; }).slice(0, 10);
+    var row = function(label, value){ return '<dt>'+label+'</dt><dd>'+(value ? esc(value) : '<span class="muted">—</span>')+'</dd>'; };
+    var root = document.getElementById('modalRoot');
+    root.innerHTML =
+      '<div class="modal-back" id="mb"><div class="modal">' +
+      '<h3>'+esc(u.name)+(u.isRegular ? ' <span class="pill on-primary small">ขาประจำ</span>' : '')+'</h3>' +
+      '<div class="sub">ข้อมูลผู้ค้า (ดูอย่างเดียว) · ใช้เพื่อติดต่อและตรวจสอบผู้ค้าเท่านั้น</div>' +
+      '<dl class="detail-list">' +
+        row('เบอร์โทรศัพท์', u.phone) + row('ที่อยู่', u.address) + row('Line ID', u.lineId) +
+        row('ประเภทสินค้า', u.category ? goodsLabel(u.category, u.foodType) : '') +
+        row('บัญชีเข้าสู่ระบบ', u.hasLogin ? u.username : 'ไม่มี (จองแบบไม่สมัครสมาชิก / จองแทน)') +
+        row('สถานะบัญชี', u.active ? 'ใช้งานอยู่' : 'ถูกระงับ') +
+        row('การจอง', u.bookingTotal + ' ครั้ง · อนุมัติ ' + u.bookingApproved + ' ครั้ง') +
+      '</dl>' +
+      (history.length ? '<div class="kicker" style="margin-top:12px">ประวัติการจองล่าสุด</div><ul class="detail-history">' + history.map(function(b){
+          return '<li><span class="mono">'+esc(b.stall_code)+'</span> '+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+
+            ' <span class="badge '+esc(b.status)+'">'+esc(statusLabel(b.status))+'</span>' +
+            (b.status === 'approved' ? ' <span class="paybadge '+esc(b.payment_status)+'">'+esc(payStatusLabel(b.payment_status))+'</span>' : '')+'</li>';
+        }).join('') + '</ul>' : '') +
+      '<div class="form-actions"><button type="button" class="btn primary" id="vdClose">ปิด</button></div>' +
+      '</div></div>';
+    var back = document.getElementById('mb');
+    back.addEventListener('click', function(e){ if (e.target===back) closeModal(); });
+    document.getElementById('vdClose').onclick = closeModal;
+  }
+
   function renderUserAdmin(panel, tab){
-    var roleId = USER_TABS[tab] || ROLE.VENDOR;
+    var head = profile.isHeadAdmin;
+    var roleId = head ? (USER_TABS[tab] || ROLE.VENDOR) : ROLE.VENDOR;
     var isVendor = roleId === ROLE.VENDOR;
     var q = state.userQuery;
     var list = state.users.filter(function(u){
@@ -2587,27 +2756,33 @@
     });
     var rows = list.map(function(u){
       var isMe = u.id === profile.userId;
+      var actions = head
+        ? '<button type="button" class="btn small ghost" data-viewuser="'+u.id+'">ดู</button> ' +
+          '<button type="button" class="btn small ghost" data-edituser="'+u.id+'">แก้ไข</button>' +
+          (!isMe ? ' <button type="button" class="btn small '+(u.active?'danger':'primary')+'" data-toggleuser="'+u.id+'">'+(u.active?'ระงับ':'เปิดใช้')+'</button>' +
+            ' <button type="button" class="btn small danger" data-deluser="'+u.id+'">ลบ</button>' : '')
+        : '<button type="button" class="btn small ghost" data-viewuser="'+u.id+'">ดูรายละเอียด</button>';
       return '<tr><td>'+esc(u.name)+(isMe?' <span class="pill on-primary small">คุณ</span>':'')+(u.isRegular?' <span class="pill on-primary small">ขาประจำ</span>':'') +
-          '<br><span class="muted small">'+(u.username ? esc(u.username) : (isVendor ? 'ไม่มีบัญชีเข้าสู่ระบบ' : ''))+'</span></td>' +
+          (head ? '<br><span class="muted small">'+(u.username ? esc(u.username) : (isVendor ? 'ไม่มีบัญชีเข้าสู่ระบบ' : ''))+'</span>' : '')+'</td>' +
         '<td>'+esc(u.phone || '—')+'</td>' +
         '<td class="small">'+esc(u.address || '—')+'</td>' +
         '<td>'+esc(u.lineId || '—')+'</td>' +
         (isVendor ? '<td class="small">'+(u.category ? esc(goodsLabel(u.category, u.foodType)) : '<span class="muted">—</span>')+'</td>' +
           '<td class="small">'+u.bookingTotal+' ครั้ง<br><span class="muted">อนุมัติ '+u.bookingApproved+'</span></td>' : '') +
         '<td><span class="badge '+(u.active?'approved':'cancelled')+'">'+(u.active?'ใช้งานอยู่':'ระงับ')+'</span></td>' +
-        '<td><button type="button" class="btn small ghost" data-edituser="'+u.id+'">แก้ไข</button>' +
-          (profile.isHeadAdmin && !isMe ? ' <button type="button" class="btn small danger" data-deluser="'+u.id+'">ลบ</button>' : '') +
-          (!profile.isHeadAdmin ? ' <button type="button" class="btn small '+(u.active?'danger':'primary')+'" data-toggleuser="'+u.id+'">'+(u.active?'ระงับ':'เปิดใช้')+'</button>' : '') +
-        '</td></tr>';
+        '<td>'+actions+'</td></tr>';
     }).join('');
     var cols = isVendor ? 8 : 6;
     panel.innerHTML = '<div class="card" style="padding:16px">' +
-      '<div class="toolbar-row">'+searchBoxHtml('userSearch', q, 'ค้นหาชื่อ / เบอร์โทรศัพท์ / ชื่อผู้ใช้')+'<span class="muted small">'+list.length+' คน</span>' +
-        '<button type="button" class="btn primary" id="uAdd">+ เพิ่ม'+ROLE_LABELS[roleId]+'</button></div>' +
+      (head ? '' : '<p class="muted small" style="margin:0 0 10px">ดูข้อมูลผู้ค้าได้อย่างเดียว เพื่อใช้ติดต่อและตรวจสอบผู้ค้า การเพิ่ม แก้ไข ระงับ หรือลบบัญชีทำได้เฉพาะผู้ดูแลระบบ</p>') +
+      '<div class="toolbar-row">'+searchBoxHtml('userSearch', q, 'ค้นหาชื่อ / เบอร์โทรศัพท์'+(head?' / ชื่อผู้ใช้':''))+'<span class="muted small">'+list.length+' คน</span>' +
+        (head ? '<button type="button" class="btn primary" id="uAdd">+ เพิ่ม'+ROLE_LABELS[roleId]+'</button>' : '') + '</div>' +
       '<div class="table-wrap"><table><thead><tr><th>ชื่อ-นามสกุล</th><th>เบอร์โทร</th><th>ที่อยู่</th><th>Line ID</th>' +
-        (isVendor ? '<th>ประเภทสินค้า</th><th>การจอง</th>' : '') + '<th>สถานะ</th><th>จัดการ</th></tr></thead>' +
+        (isVendor ? '<th>ประเภทสินค้า</th><th>การจอง</th>' : '') + '<th>สถานะ</th><th>'+(head?'จัดการ':'')+'</th></tr></thead>' +
       '<tbody>'+(rows || '<tr><td colspan="'+cols+'" class="empty">ไม่พบผู้ใช้</td></tr>')+'</tbody></table></div></div>';
     bindSearch('userSearch', 'userQuery', function(){ renderUserAdmin(panel, tab); });
+    panel.querySelectorAll('[data-viewuser]').forEach(function(btn){ btn.addEventListener('click', function(){ openVendorDetail(btn.dataset.viewuser); }); });
+    if (!head) return;
     document.getElementById('uAdd').onclick = function(){ openUserModal(null, roleId); };
     panel.querySelectorAll('[data-edituser]').forEach(function(btn){ btn.addEventListener('click', function(){ openUserModal(btn.dataset.edituser); }); });
     panel.querySelectorAll('[data-deluser]').forEach(function(btn){
@@ -2722,7 +2897,7 @@
       var reason = log ? (log.fine_reason||'') : '';
       return '<tr data-bookingid="'+b.id+'">' +
         '<td class="mono">'+esc(b.stall_code||'—')+'</td>' +
-        '<td>'+esc(b.vendor_name)+'</td>' +
+        '<td>'+esc(b.vendor_name)+'<br><span class="muted small">'+esc(b.vendor_phone||'')+'</span></td>' +
         '<td class="small">'+esc(anyCategoryLabel(b.category_id))+'</td>' +
         '<td><select class="au-present"><option value="1" '+(present?'selected':'')+'>มาขาย</option><option value="0" '+(!present?'selected':'')+'>ไม่มาขาย</option></select></td>' +
         '<td><select class="au-catmatch"><option value="1" '+(catMatch?'selected':'')+'>ตรงกัน</option><option value="0" '+(!catMatch?'selected':'')+'>ไม่ตรงกัน</option></select></td>' +
@@ -3088,7 +3263,8 @@
         : '<div class="check-grid">' + ADMIN_MENUS.map(function(m){
             var on = r.menus.indexOf(m.key) !== -1;
             var lock = !editable || m.key === 'settings';
-            return '<label class="check-chip"><input type="checkbox" name="roleMenu'+r.id+'" value="'+m.key+'"'+(on?' checked':'')+(lock?' disabled':'')+'>'+m.icon+' '+m.label+'</label>';
+            var label = r.id === ROLE.STAFF && m.key === 'users' ? 'ข้อมูลผู้ค้า (ดูอย่างเดียว)' : m.label;
+            return '<label class="check-chip"><input type="checkbox" name="roleMenu'+r.id+'" value="'+m.key+'"'+(on?' checked':'')+(lock?' disabled':'')+'>'+m.icon+' '+label+'</label>';
           }).join('') + '</div>' +
           (r.id === ROLE.ADMIN ? '<p class="muted small">ผู้ดูแลระบบเข้าถึงได้ทุกเมนูเสมอ</p>' : '<p class="muted small">เมนูตั้งค่าระบบสงวนไว้สำหรับผู้ดูแลระบบ</p>');
       return '<div class="card role-card" style="padding:16px">' +
