@@ -46,6 +46,9 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 4000;
 db.init()
   .then(() => {
+    // Slips uploaded before the e-Slip check are read once, in the background.
+    require('./slip').backfill(db).then((n) => { if (n) console.log(`Checked ${n} earlier slip(s)`); })
+      .catch((err) => console.error('Slip backfill failed:', err.message));
     app.listen(PORT, () => {
       console.log(`Talat Pinklao server listening on http://localhost:${PORT}`);
     });
