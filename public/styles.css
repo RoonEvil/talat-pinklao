@@ -216,9 +216,14 @@ main{ padding-top:18px; }
 .iso-paving{ stroke:color-mix(in srgb, var(--muted) 16%, transparent); stroke-width:.6; }
 .iso-grid{ stroke:color-mix(in srgb, var(--primary) 30%, transparent); stroke-width:.7; stroke-dasharray:2 3; }
 
-/* tents */
-.tent-wall{ fill:var(--canvas); stroke:rgba(0,0,0,.18); stroke-width:.5; }
-.tent-wall-r{ fill:color-mix(in srgb, var(--canvas) 82%, #000); }
+/* zone ground: each zone sits on its own coloured area */
+.iso-zone-area{
+  fill:color-mix(in srgb, var(--c) 24%, var(--ground)); stroke:var(--c); stroke-width:2.2; stroke-linejoin:round;
+}
+
+/* tents: roof = booking status, walls = zone colour (falls back to canvas in the editor) */
+.tent-wall{ fill:color-mix(in srgb, var(--z, var(--canvas)) 60%, var(--canvas)); stroke:rgba(0,0,0,.18); stroke-width:.5; }
+.tent-wall-r{ fill:color-mix(in srgb, color-mix(in srgb, var(--z, var(--canvas)) 60%, var(--canvas)) 80%, #000); }
 .tent-roof{ fill:var(--c); stroke:color-mix(in srgb, var(--c) 70%, #000); stroke-width:.6; stroke-linejoin:round; }
 .tent-roof-back{ fill:color-mix(in srgb, var(--c) 78%, #000); }
 .tent-gable{ fill:color-mix(in srgb, var(--c) 62%, #000); }
@@ -249,6 +254,8 @@ main{ padding-top:18px; }
 .sign-board{ fill:var(--surface); stroke:var(--accent); stroke-width:1.5; }
 .sign-text{ fill:var(--ink); font-family:'Bai Jamjuree','IBM Plex Sans Thai',sans-serif; font-size:11.5px; font-weight:700; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
 .iso-svg:not(.is-edit) .iso-text .iso-pad{ display:none; }
+.is-zone-sign .sign-board{ fill:var(--c); stroke:color-mix(in srgb, var(--c) 70%, #000); stroke-width:1.5; }
+.is-zone-sign .sign-text{ fill:#fff; paint-order:stroke; stroke:rgba(0,0,0,.35); stroke-width:2px; }
 
 .iso-item[role="button"]{ cursor:pointer; }
 .iso-item[role="button"]:hover .tent-roof-front, .iso-item[role="button"]:hover .box-top{ filter:brightness(1.12); }
@@ -368,9 +375,21 @@ input:focus, select:focus, textarea:focus{ outline:2px solid var(--primary); out
 .zone-rule{ margin:6px 0 0; font-size:.78rem; color:var(--accent); font-weight:600; line-height:1.45; }
 .zone-rule b{ color:var(--ink); }
 .modal .zone-rule{ margin:2px 0 14px; }
-.zone-rules{ list-style:none; margin:0; padding:8px 14px 12px; display:flex; flex-wrap:wrap; gap:4px 18px; font-size:.8rem; color:var(--muted); }
-.zone-rules li{ display:inline-flex; align-items:center; gap:6px; }
-.zone-rules b{ color:var(--ink); font-weight:600; }
+.zone-rules{
+  list-style:none; margin:0; padding:10px 14px 14px; display:grid; gap:8px;
+  grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); font-size:.8rem; color:var(--muted);
+}
+.zone-rules li{
+  display:flex; align-items:flex-start; gap:10px; padding:9px 11px; border-radius:9px;
+  background:color-mix(in srgb, var(--zc) 14%, var(--surface)); border:1px solid color-mix(in srgb, var(--zc) 55%, transparent);
+  border-left:5px solid var(--zc);
+}
+.zone-swatch{ flex:none; width:18px; height:18px; margin-top:1px; border-radius:5px; background:var(--zc); box-shadow:inset 0 0 0 1px rgba(0,0,0,.18); }
+.zone-key-text{ display:flex; flex-direction:column; gap:2px; line-height:1.4; }
+.zone-key-text b{ color:var(--ink); font-weight:700; font-size:.86rem; }
+.zone-key-count{ color:var(--ink); font-weight:600; }
+.zone-btn{ border-color:color-mix(in srgb, var(--zc) 60%, transparent); background:color-mix(in srgb, var(--zc) 14%, transparent); }
+.zone-btn:hover{ background:color-mix(in srgb, var(--zc) 26%, transparent); }
 .clash-note{
   margin:4px 0 8px; padding:10px 12px; border-radius:8px; font-size:.84rem; font-weight:600; line-height:1.5;
   background:var(--danger-soft); color:var(--danger); border:1px solid color-mix(in srgb, var(--danger) 35%, transparent);
