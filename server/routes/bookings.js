@@ -324,6 +324,13 @@ router.put('/:id/payment', optionalStaff('payments'), loadOwnedBooking, wrap(asy
   const existing = await db.get('SELECT * FROM payments WHERE booking_id = ?', [req.booking.booking_id]);
   if (existing && existing.status === 'confirmed' && !req.staff) return res.status(409).json({ error: 'การชำระเงินนี้ได้รับการยืนยันแล้ว' });
   const method = paymentMethod || (existing && existing.method) || (paymentStatus === 'confirmed' ? 'cash' : 'promptpay');
+  // 5.4: a transfer (PromptPay / bank) is confirmed only with its slip attached; cash needs no slip.
+  if (paymentStatus === 'confirmed' && method !== 'cash' && !(existing && existing.slip_picture_id)) {
+    return res.status(400).json({
+      error: 'ยังไม่มีสลิปของการโอนเงินนี้ จึงยืนยันรับเงินไม่ได้ กรุณารอผู้ค้าแนบสลิป หรือถ้ารับเป็นเงินสด ให้กด "รับเงินสดแล้ว"',
+      code: 'SLIP_REQUIRED'
+    });
+  }
   if (paymentStatus === 'paid') {
     await db.run(
       `INSERT INTO payments (booking_id, method, amount, status, paid_at) VALUES (?,?,?, 'paid', NOW())

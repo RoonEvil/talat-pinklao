@@ -1847,7 +1847,12 @@
         (b.receipt_path ? '<a href="'+esc(b.receipt_path)+'" target="_blank" rel="noopener" title="แตะเพื่อขยาย"><img class="receipt-thumb" src="'+esc(b.receipt_path)+'" data-full="'+esc(b.receipt_path)+'" alt="สลิปการชำระเงิน แตะเพื่อขยาย"></a>'
           : '<span class="muted small">'+(cash ? 'ชำระเงินสด' : 'ยังไม่แนบสลิป')+'</span>') +
         '<span class="paybadge paid">'+esc(methodLabel(b.payment_method))+' · '+fmtMoney(b.total_amount)+'</span>' + slipBadgeHtml(b) +
-        '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>' +
+        // A transfer is confirmed only with its slip; cash needs none (the server enforces this too).
+        (cash || b.receipt_path
+          ? '<div class="row-actions"><button class="btn small primary" data-confirmpay="'+b.id+'">ยืนยันรับเงิน</button></div>'
+          : '<div class="row-actions"><span class="muted small">รอผู้ค้าแนบสลิปก่อนยืนยัน</span>' +
+            '<button class="btn small primary" disabled title="เงินโอนต้องมีสลิปก่อนยืนยันรับเงิน">ยืนยันรับเงิน</button>' +
+            '<button class="btn small ghost" data-cashpay="'+b.id+'">รับเงินสดแล้ว</button></div>') +
         '</div>';
     }).join('');
     panel.innerHTML = '<div class="card" style="padding:16px">' +
@@ -1856,6 +1861,11 @@
       '</div>';
     panel.querySelectorAll('[data-confirmpay]').forEach(function(btn){
       btn.addEventListener('click', function(){ confirmPay(btn.dataset.confirmpay); });
+    });
+    panel.querySelectorAll('[data-cashpay]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        confirmAction('ผู้ค้าชำระเป็นเงินสดที่สำนักงานตลาดแล้วใช่หรือไม่? ระบบจะบันทึกเป็นการรับเงินสด', function(){ confirmPay(btn.dataset.cashpay, 'cash'); }, 'ยืนยันรับเงินสด');
+      });
     });
     wireReceiptThumbs(panel);
   }
